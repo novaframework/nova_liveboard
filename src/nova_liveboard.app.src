@@ -1,0 +1,15 @@
+{application, nova_liveboard, [
+    {description, "Real-time BEAM VM dashboard for Nova"},
+    {vsn, git},
+    {registered, []},
+    {applications, [
+        kernel,
+        stdlib,
+        nova,
+        arizona_core,
+        arizona_nova
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]}
+]}.
