@@ -3,6 +3,8 @@
 
 -export([render/1]).
 
+-export([kura_nav/2]).
+
 render(Bindings) ->
     arizona_template:from_html(
         ~"""
@@ -30,6 +32,7 @@ render(Bindings) ->
                 <a href="{arizona_template:get_binding(prefix, Bindings)}/ports" class="{nav_class(arizona_template:get_binding(active_page, Bindings), <<"ports">>)}">Ports</a>
                 <a href="{arizona_template:get_binding(prefix, Bindings)}/supervisors" class="{nav_class(arizona_template:get_binding(active_page, Bindings), <<"supervisors">>)}">Supervisors</a>
                 <a href="{arizona_template:get_binding(prefix, Bindings)}/metrics" class="{nav_class(arizona_template:get_binding(active_page, Bindings), <<"metrics">>)}">Metrics</a>
+                {kura_nav(arizona_template:get_binding(prefix, Bindings), arizona_template:get_binding(active_page, Bindings))}
             </div>
         </nav>
         <main class="main">
@@ -42,3 +45,21 @@ render(Bindings) ->
 
 nav_class(Active, Page) when Active =:= Page -> ~"active";
 nav_class(_, _) -> ~"".
+
+kura_nav(Prefix, Active) ->
+    case nova_liveboard_data:kura_available() of
+        true ->
+            arizona_template:from_html(
+                ~"""
+            <span class="nav-sep"></span>
+            <a href="{Prefix}/database" class="{nav_class(Active, <<"database">>)}">Database</a>
+            <a href="{Prefix}/schemas" class="{nav_class(Active, <<"schemas">>)}">Schemas</a>
+            """
+            );
+        false ->
+            arizona_template:from_html(
+                ~"""
+            <span></span>
+            """
+            )
+    end.

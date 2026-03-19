@@ -25,6 +25,8 @@ resolve_view(Path) ->
         <<"ports">> -> {nova_liveboard_ports_view, undefined};
         <<"supervisors">> -> {nova_liveboard_sup_view, undefined};
         <<"metrics">> -> {nova_liveboard_metrics_view, undefined};
+        <<"database">> -> {nova_liveboard_database_view, undefined};
+        <<"schemas">> -> {nova_liveboard_schemas_view, undefined};
         _ -> {nova_liveboard_system_view, undefined}
     end.
 
@@ -46,4 +48,6 @@ view_for_page(<<"applications">>) -> true;
 view_for_page(<<"ports">>) -> true;
 view_for_page(<<"supervisors">>) -> true;
 view_for_page(<<"metrics">>) -> true;
+view_for_page(<<"database">>) -> true;
+view_for_page(<<"schemas">>) -> true;
 view_for_page(_) -> false.

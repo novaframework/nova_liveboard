@@ -108,12 +108,20 @@ handle_info(refresh, View) ->
     OldMetrics = arizona_stateful:get_binding(metrics_state, State),
     NewMetrics = nova_liveboard_data:collect_metrics(OldMetrics),
     NewB = metrics_to_bindings(NewMetrics),
-    lists:foldl(fun({K, V}, S) ->
-        arizona_stateful:put_binding(K, V, S)
-    end, State, maps:to_list(NewB)),
-    UpdatedState = lists:foldl(fun({K, V}, S) ->
-        arizona_stateful:put_binding(K, V, S)
-    end, State, maps:to_list(NewB)),
+    lists:foldl(
+        fun({K, V}, S) ->
+            arizona_stateful:put_binding(K, V, S)
+        end,
+        State,
+        maps:to_list(NewB)
+    ),
+    UpdatedState = lists:foldl(
+        fun({K, V}, S) ->
+            arizona_stateful:put_binding(K, V, S)
+        end,
+        State,
+        maps:to_list(NewB)
+    ),
     {[], arizona_view:update_state(UpdatedState, View)}.
 
 %% Internal
