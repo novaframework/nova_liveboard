@@ -18,18 +18,32 @@ index(CowboyReq) ->
     end.
 
 resolve_view(Path) ->
-    Page = extract_page(Path),
-    case Page of
+    case page_from_path(Path) of
         <<"processes">> -> {nova_liveboard_processes_view, undefined};
         <<"ets">> -> {nova_liveboard_ets_view, undefined};
         <<"applications">> -> {nova_liveboard_apps_view, undefined};
         <<"ports">> -> {nova_liveboard_ports_view, undefined};
+        <<"supervisors">> -> {nova_liveboard_sup_view, undefined};
+        <<"metrics">> -> {nova_liveboard_metrics_view, undefined};
         _ -> {nova_liveboard_system_view, undefined}
     end.
 
-extract_page(Path) ->
-    Parts = binary:split(Path, <<"/">>, [global, trim_all]),
-    case lists:last(Parts) of
-        <<"liveboard">> -> <<"system">>;
-        Page -> Page
+page_from_path(Path) ->
+    case binary:split(Path, <<"/">>, [global, trim_all]) of
+        [] ->
+            <<"system">>;
+        Parts ->
+            Last = lists:last(Parts),
+            case view_for_page(Last) of
+                true -> Last;
+                false -> <<"system">>
+            end
     end.
+
+view_for_page(<<"processes">>) -> true;
+view_for_page(<<"ets">>) -> true;
+view_for_page(<<"applications">>) -> true;
+view_for_page(<<"ports">>) -> true;
+view_for_page(<<"supervisors">>) -> true;
+view_for_page(<<"metrics">>) -> true;
+view_for_page(_) -> false.
