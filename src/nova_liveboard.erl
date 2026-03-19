@@ -1,30 +1,10 @@
 -module(nova_liveboard).
 
--export([setup/0, setup/1]).
+-export([prefix/0]).
 
--spec setup() -> ok.
-setup() ->
-    setup(#{}).
-
--spec setup(Opts :: map()) -> ok.
-setup(Opts) ->
-    Prefix = maps:get(prefix, Opts, "/liveboard"),
-    Routes = [
-        #{
-            prefix => Prefix,
-            security => false,
-            routes => [
-                {"/", fun nova_liveboard_page_controller:index/1, #{methods => [get]}},
-                {"/live", nova_liveboard_ws, #{protocol => ws}},
-                {"/:page", fun nova_liveboard_page_controller:index/1, #{methods => [get]}}
-            ]
-        },
-        #{
-            prefix => "",
-            security => false,
-            routes => [
-                {"/assets/[...]", "static/assets"}
-            ]
-        }
-    ],
-    nova_router:add_routes(nova_liveboard, Routes).
+-spec prefix() -> binary().
+prefix() ->
+    case application:get_env(nova_liveboard, prefix, ~"/liveboard") of
+        Prefix when is_binary(Prefix) -> Prefix;
+        Prefix when is_list(Prefix) -> list_to_binary(Prefix)
+    end.

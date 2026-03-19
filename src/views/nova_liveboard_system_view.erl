@@ -4,28 +4,30 @@
 
 -export([mount/2, render/1, handle_info/2]).
 
-mount(_Arg, Req) ->
+mount(_Arg, _Req) ->
     case arizona_live:is_connected(self()) of
         true -> erlang:send_after(2000, self(), refresh);
         false -> ok
     end,
     Info = nova_liveboard_data:system_info(),
-    Prefix = extract_prefix(arizona_request:get_path(Req)),
+    Prefix = nova_liveboard:prefix(),
     Bindings = #{
         id => ~"system_view",
         info => Info
     },
-    Layout = {nova_liveboard_layout, render, main_content, #{
-        active_page => ~"system",
-        prefix => Prefix,
-        ws_path => <<Prefix/binary, "/live">>
-    }},
+    Layout =
+        {nova_liveboard_layout, render, main_content, #{
+            active_page => ~"system",
+            prefix => Prefix,
+            ws_path => <<Prefix/binary, "/live">>
+        }},
     arizona_view:new(?MODULE, Bindings, Layout).
 
 render(Bindings) ->
     Info = arizona_template:get_binding(info, Bindings),
     Mem = maps:get(memory, Info),
-    arizona_template:from_html(~"""
+    arizona_template:from_html(
+        ~"""
     <div id="{arizona_template:get_binding(id, Bindings)}">
         <p class="refresh-info">Auto-refreshes every 2s</p>
 
@@ -104,7 +106,8 @@ render(Bindings) ->
             </table>
         </div>
     </div>
-    """).
+    """
+    ).
 
 handle_info(refresh, View) ->
     erlang:send_after(2000, self(), refresh),
@@ -115,12 +118,6 @@ handle_info(refresh, View) ->
 
 %% Internal
 
-extract_prefix(Path) ->
-    case binary:split(Path, <<"/">>, [global, trim_all]) of
-        [Prefix | _] -> <<"/" , Prefix/binary>>;
-        _ -> ~"/liveboard"
-    end.
-
 usage_pct(Used, Limit) when Limit > 0 ->
     Pct = (Used * 100) div Limit,
     integer_to_binary(min(100, Pct));
@@ -128,16 +125,19 @@ usage_pct(_, _) ->
     ~"0".
 
 render_mem_row(Label, Value, Total) ->
-    Pct = case Total of
-        0 -> 0;
-        _ -> (Value * 100) div Total
-    end,
-    Color = if
-        Pct > 60 -> ~"bar-fill-red";
-        Pct > 30 -> ~"bar-fill-amber";
-        true -> ~"bar-fill-blue"
-    end,
-    arizona_template:from_html(~"""
+    Pct =
+        case Total of
+            0 -> 0;
+            _ -> (Value * 100) div Total
+        end,
+    Color =
+        if
+            Pct > 60 -> ~"bar-fill-red";
+            Pct > 30 -> ~"bar-fill-amber";
+            true -> ~"bar-fill-blue"
+        end,
+    arizona_template:from_html(
+        ~"""
     <tr>
         <td>{Label}</td>
         <td class="text-right mono">{nova_liveboard_data:format_bytes(Value)}</td>
@@ -148,4 +148,5 @@ render_mem_row(Label, Value, Total) ->
             </div>
         </td>
     </tr>
-    """).
+    """
+    ).

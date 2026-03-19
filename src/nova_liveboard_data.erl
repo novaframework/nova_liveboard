@@ -7,6 +7,9 @@
     running_applications/0,
     port_info/0,
     scheduler_info/0,
+    supervision_tree/1,
+    collect_metrics/1,
+    sparkline_points/3,
     format_bytes/1,
     format_number/1,
     format_uptime/1
@@ -56,15 +59,17 @@ top_processes(SortBy, Limit) ->
     Procs = erlang:processes(),
     ProcInfos = lists:filtermap(
         fun(Pid) ->
-            case erlang:process_info(Pid, [
-                registered_name,
-                memory,
-                reductions,
-                message_queue_len,
-                current_function,
-                initial_call,
-                status
-            ]) of
+            case
+                erlang:process_info(Pid, [
+                    registered_name,
+                    memory,
+                    reductions,
+                    message_queue_len,
+                    current_function,
+                    initial_call,
+                    status
+                ])
+            of
                 undefined ->
                     false;
                 Info ->
@@ -95,7 +100,8 @@ ets_tables() ->
                             name => atom_to_binary(proplists:get_value(name, Info)),
                             size => proplists:get_value(size, Info),
                             memory_words => proplists:get_value(memory, Info),
-                            memory_bytes => proplists:get_value(memory, Info) * erlang:system_info(wordsize),
+                            memory_bytes => proplists:get_value(memory, Info) *
+                                erlang:system_info(wordsize),
                             owner => format_pid(proplists:get_value(owner, Info)),
                             type => atom_to_binary(proplists:get_value(type, Info)),
                             protection => atom_to_binary(proplists:get_value(protection, Info))
@@ -156,6 +162,90 @@ scheduler_info() ->
         end,
         lists:seq(1, Count)
     ).
+
+-spec supervision_tree(atom()) -> {ok, list()} | {error, term()}.
+supervision_tree(AppName) ->
+    case find_top_supervisor(AppName) of
+        undefined -> {error, no_supervisor};
+        Pid -> {ok, build_tree(Pid)}
+    end.
+
+-spec collect_metrics(undefined | map()) -> map().
+collect_metrics(undefined) ->
+    erlang:system_flag(scheduler_wall_time, true),
+    Mem = erlang:memory(),
+    {{input, In}, {output, Out}} = erlang:statistics(io),
+    SchedWall = scheduler_wall_time(),
+    #{
+        total_memory => queue:from_list([proplists:get_value(total, Mem)]),
+        process_memory => queue:from_list([proplists:get_value(processes, Mem)]),
+        binary_memory => queue:from_list([proplists:get_value(binary, Mem)]),
+        process_count => queue:from_list([erlang:system_info(process_count)]),
+        run_queue => queue:from_list([erlang:statistics(run_queue)]),
+        io_input => queue:from_list([0]),
+        io_output => queue:from_list([0]),
+        scheduler_util => [],
+        prev_io => {In, Out},
+        prev_sched => SchedWall,
+        max_points => 60
+    };
+collect_metrics(
+    #{max_points := MaxPts, prev_io := {PrevIn, PrevOut}, prev_sched := PrevSched} = State
+) ->
+    Mem = erlang:memory(),
+    {{input, In}, {output, Out}} = erlang:statistics(io),
+    SchedWall = scheduler_wall_time(),
+    SchedUtil = calc_sched_util(PrevSched, SchedWall),
+    Append = fun(Key, Val, S) ->
+        Q0 = maps:get(Key, S),
+        Q1 = queue:in(Val, Q0),
+        Q2 =
+            case queue:len(Q1) > MaxPts of
+                true -> element(2, queue:out(Q1));
+                false -> Q1
+            end,
+        maps:put(Key, Q2, S)
+    end,
+    S1 = Append(total_memory, proplists:get_value(total, Mem), State),
+    S2 = Append(process_memory, proplists:get_value(processes, Mem), S1),
+    S3 = Append(binary_memory, proplists:get_value(binary, Mem), S2),
+    S4 = Append(process_count, erlang:system_info(process_count), S3),
+    S5 = Append(run_queue, erlang:statistics(run_queue), S4),
+    S6 = Append(io_input, In - PrevIn, S5),
+    S7 = Append(io_output, Out - PrevOut, S6),
+    S7#{prev_io => {In, Out}, prev_sched => SchedWall, scheduler_util => SchedUtil}.
+
+-spec sparkline_points(list(), number(), number()) -> binary().
+sparkline_points([], _Width, _Height) ->
+    ~"";
+sparkline_points([_], Width, Height) ->
+    iolist_to_binary(io_lib:format("0,~.1f ~.1f,~.1f", [Height / 2.0, float(Width), Height / 2.0]));
+sparkline_points(Values, Width, Height) ->
+    Min = lists:min(Values),
+    Max = lists:max(Values),
+    Range =
+        case Max - Min of
+            0 -> 1;
+            R -> R
+        end,
+    Len = length(Values),
+    Step = Width / max(1, Len - 1),
+    {Points, _} = lists:foldl(
+        fun(V, {Acc, I}) ->
+            X = I * Step,
+            Y = Height - ((V - Min) / Range * Height),
+            Pt = io_lib:format("~.1f,~.1f", [float(X), float(Y)]),
+            Sep =
+                case Acc of
+                    [] -> [];
+                    _ -> [Acc, " "]
+                end,
+            {[Sep, Pt], I + 1}
+        end,
+        {[], 0},
+        Values
+    ),
+    iolist_to_binary(Points).
 
 %% Internal
 
@@ -229,4 +319,156 @@ format_uptime(Ms) ->
             0 -> io_lib:format("~2..0B:~2..0B:~2..0B", [Hours, Mins, S]);
             _ -> io_lib:format("~Bd ~2..0B:~2..0B:~2..0B", [Days, Hours, Mins, S])
         end
+    ).
+
+find_top_supervisor(AppName) ->
+    case try_named_sup(AppName) of
+        Pid when is_pid(Pid) -> Pid;
+        undefined -> find_sup_via_master(AppName)
+    end.
+
+try_named_sup(AppName) ->
+    SupStr = atom_to_list(AppName) ++ "_sup",
+    try list_to_existing_atom(SupStr) of
+        SupName -> whereis(SupName)
+    catch
+        error:badarg -> undefined
+    end.
+
+find_sup_via_master(AppName) ->
+    try application_controller:get_master(AppName) of
+        MasterPid when is_pid(MasterPid) ->
+            %% application_master links to: application_controller + a starter process
+            %% The starter process links to the top supervisor
+            case erlang:process_info(MasterPid, links) of
+                {links, Links} ->
+                    find_sup_in_master_links(Links);
+                _ ->
+                    undefined
+            end;
+        _ ->
+            undefined
+    catch
+        _:_ -> undefined
+    end.
+
+find_sup_in_master_links([]) ->
+    undefined;
+find_sup_in_master_links([Pid | Rest]) when is_pid(Pid) ->
+    %% Skip the application_controller itself
+    case Pid =:= whereis(application_controller) of
+        true ->
+            find_sup_in_master_links(Rest);
+        false ->
+            %% This is the starter process; its child is the top supervisor
+            case erlang:process_info(Pid, links) of
+                {links, ChildLinks} ->
+                    find_first_supervisor(ChildLinks);
+                _ ->
+                    find_sup_in_master_links(Rest)
+            end
+    end;
+find_sup_in_master_links([_ | Rest]) ->
+    find_sup_in_master_links(Rest).
+
+find_first_supervisor([]) ->
+    undefined;
+find_first_supervisor([Pid | Rest]) when is_pid(Pid) ->
+    try supervisor:which_children(Pid) of
+        _ -> Pid
+    catch
+        _:_ -> find_first_supervisor(Rest)
+    end;
+find_first_supervisor([_ | Rest]) ->
+    find_first_supervisor(Rest).
+
+build_tree(Pid) ->
+    try supervisor:which_children(Pid) of
+        Children ->
+            lists:map(
+                fun({Id, ChildPid, Type, _Mods}) ->
+                    Base = #{
+                        type => Type,
+                        name => format_child_id(Id),
+                        pid => format_child_pid(ChildPid),
+                        status => child_status(ChildPid)
+                    },
+                    ProcInfo = child_proc_info(ChildPid),
+                    WithInfo = maps:merge(Base, ProcInfo),
+                    case Type of
+                        supervisor when is_pid(ChildPid) ->
+                            WithInfo#{children => build_tree(ChildPid)};
+                        _ ->
+                            WithInfo#{children => []}
+                    end
+                end,
+                Children
+            )
+    catch
+        _:_ -> []
+    end.
+
+format_child_id(Id) when is_atom(Id) -> atom_to_binary(Id);
+format_child_id(Id) -> iolist_to_binary(io_lib:format("~p", [Id])).
+
+format_child_pid(Pid) when is_pid(Pid) -> list_to_binary(pid_to_list(Pid));
+format_child_pid(undefined) -> ~"undefined";
+format_child_pid(restarting) -> ~"restarting";
+format_child_pid(_) -> ~"unknown".
+
+child_status(Pid) when is_pid(Pid) ->
+    case erlang:process_info(Pid, status) of
+        {status, S} -> atom_to_binary(S);
+        undefined -> ~"dead"
+    end;
+child_status(restarting) ->
+    ~"restarting";
+child_status(_) ->
+    ~"stopped".
+
+child_proc_info(Pid) when is_pid(Pid) ->
+    case erlang:process_info(Pid, [memory, message_queue_len, current_function]) of
+        undefined ->
+            #{memory => 0, message_queue_len => 0, current_function => ~"unknown"};
+        Info ->
+            #{
+                memory => proplists:get_value(memory, Info, 0),
+                message_queue_len => proplists:get_value(message_queue_len, Info, 0),
+                current_function => format_mfa(proplists:get_value(current_function, Info))
+            }
+    end;
+child_proc_info(_) ->
+    #{memory => 0, message_queue_len => 0, current_function => ~"—"}.
+
+scheduler_wall_time() ->
+    try erlang:statistics(scheduler_wall_time) of
+        undefined -> [];
+        List when is_list(List) -> lists:sort(List);
+        _ -> []
+    catch
+        _:_ -> []
+    end.
+
+calc_sched_util([], _) ->
+    [];
+calc_sched_util(_, []) ->
+    [];
+calc_sched_util(Prev, Curr) ->
+    Map = maps:from_list([{I, {A, T}} || {I, A, T} <- Prev]),
+    lists:filtermap(
+        fun({I, A1, T1}) ->
+            case maps:find(I, Map) of
+                {ok, {A0, T0}} ->
+                    DT = T1 - T0,
+                    Util =
+                        case DT of
+                            0 -> 0.0;
+                            _ -> (A1 - A0) / DT * 100
+                        end,
+                    {true, #{id => I, util => Util}};
+                error ->
+                    false
+            end
+        end,
+        Curr
     ).
