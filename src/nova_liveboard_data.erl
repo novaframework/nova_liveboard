@@ -12,7 +12,14 @@
     sparkline_points/3,
     format_bytes/1,
     format_number/1,
-    format_uptime/1
+    format_uptime/1,
+    %% Kura
+    kura_available/0,
+    kura_repos/0,
+    kura_repo_info/1,
+    kura_pool_stats/1,
+    kura_migration_status/1,
+    kura_schemas/1
 ]).
 
 -spec system_info() -> map().
@@ -247,6 +254,95 @@ sparkline_points(Values, Width, Height) ->
     ),
     iolist_to_binary(Points).
 
+%%----------------------------------------------------------------------
+%% Kura
+%%----------------------------------------------------------------------
+
+-spec kura_available() -> boolean().
+kura_available() ->
+    case application:get_key(kura, vsn) of
+        {ok, _} -> true;
+        undefined -> false
+    end.
+
+-spec kura_repos() -> [module()].
+kura_repos() ->
+    case kura_available() of
+        false ->
+            [];
+        true ->
+            [
+                M
+             || {M, _} <- code:all_loaded(),
+                is_kura_repo(M)
+            ]
+    end.
+
+-spec kura_repo_info(module()) -> map().
+kura_repo_info(RepoMod) ->
+    Config = kura_repo:config(RepoMod),
+    #{
+        module => atom_to_binary(RepoMod),
+        database => maps:get(database, Config, ~"unknown"),
+        hostname => maps:get(hostname, Config, ~"localhost"),
+        port => maps:get(port, Config, 5432),
+        pool_size => maps:get(pool_size, Config, 10),
+        pool => maps:get(pool, Config, RepoMod)
+    }.
+
+-spec kura_pool_stats(atom()) -> map().
+kura_pool_stats(PoolName) ->
+    try
+        PoolPid = whereis(PoolName),
+        case PoolPid of
+            undefined ->
+                #{status => ~"down", available => 0, checked_out => 0, queued => 0};
+            _ ->
+                pool_stats_from_pid(PoolPid, PoolName)
+        end
+    catch
+        _:_ ->
+            #{status => ~"unknown", available => 0, checked_out => 0, queued => 0}
+    end.
+
+-spec kura_migration_status(module()) -> [map()].
+kura_migration_status(RepoMod) ->
+    try
+        Status = kura_migrator:status(RepoMod),
+        [
+            #{
+                version => integer_to_binary(V),
+                module => atom_to_binary(M),
+                status => atom_to_binary(S)
+            }
+         || {V, M, S} <- Status
+        ]
+    catch
+        _:_ -> []
+    end.
+
+-spec kura_schemas(module()) -> [map()].
+kura_schemas(RepoMod) ->
+    case application:get_application(RepoMod) of
+        {ok, App} ->
+            case application:get_key(App, modules) of
+                {ok, Modules} ->
+                    lists:filtermap(
+                        fun(M) ->
+                            case is_kura_schema(M) of
+                                true -> {true, schema_info(M)};
+                                false -> false
+                            end
+                        end,
+                        lists:sort(Modules)
+                    );
+                _ ->
+                    []
+            end;
+        undefined ->
+            []
+    end.
+
 %% Internal
 
 memsup_or_vm_memory() ->
@@ -472,3 +568,167 @@ calc_sched_util(Prev, Curr) ->
         end,
         Curr
     ).
+
+is_kura_repo(Mod) ->
+    try
+        Behaviours = proplists:get_value(behaviour, Mod:module_info(attributes), []),
+        lists:member(kura_repo, Behaviours)
+    catch
+        _:_ -> false
+    end.
+
+is_kura_schema(Mod) ->
+    try
+        Behaviours = proplists:get_value(behaviour, Mod:module_info(attributes), []),
+        lists:member(kura_schema, Behaviours)
+    catch
+        _:_ -> false
+    end.
+
+schema_info(Mod) ->
+    Fields =
+        try Mod:fields() of
+            Fs -> [field_info(F) || F <- Fs]
+        catch
+            _:_ -> []
+        end,
+    Assocs =
+        try kura_schema:associations(Mod) of
+            As -> [assoc_info(A) || A <- As]
+        catch
+            _:_ -> []
+        end,
+    Indexes =
+        try kura_schema:indexes(Mod) of
+            Is -> [index_info(I) || I <- Is]
+        catch
+            _:_ -> []
+        end,
+    #{
+        module => atom_to_binary(Mod),
+        table =>
+            try
+                Mod:table()
+            catch
+                _:_ -> ~"unknown"
+            end,
+        fields => Fields,
+        associations => Assocs,
+        indexes => Indexes
+    }.
+
+field_info({kura_field, Name, Type, _Col, _Default, PK, _Nullable, Virtual}) ->
+    #{
+        name => atom_to_binary(Name),
+        type => format_kura_type(Type),
+        primary_key => PK,
+        virtual => Virtual
+    }.
+
+assoc_info({kura_assoc, Name, Type, Schema, _FK, _JoinThrough, _JoinKeys}) ->
+    #{
+        name => atom_to_binary(Name),
+        type => atom_to_binary(Type),
+        schema => atom_to_binary(Schema)
+    }.
+
+index_info({Columns, Opts}) when is_map(Opts) ->
+    #{
+        columns => [atom_to_binary(C) || C <- Columns],
+        unique => maps:get(unique, Opts, false)
+    };
+index_info({Columns, _}) ->
+    #{
+        columns => [atom_to_binary(C) || C <- Columns],
+        unique => false
+    }.
+
+format_kura_type(id) ->
+    ~"id";
+format_kura_type(integer) ->
+    ~"integer";
+format_kura_type(float) ->
+    ~"float";
+format_kura_type(string) ->
+    ~"string";
+format_kura_type(text) ->
+    ~"text";
+format_kura_type(boolean) ->
+    ~"boolean";
+format_kura_type(date) ->
+    ~"date";
+format_kura_type(utc_datetime) ->
+    ~"utc_datetime";
+format_kura_type(uuid) ->
+    ~"uuid";
+format_kura_type(jsonb) ->
+    ~"jsonb";
+format_kura_type({enum, Vals}) ->
+    iolist_to_binary([~"enum(", lists:join(~", ", [atom_to_binary(V) || V <- Vals]), ~")"]);
+format_kura_type({array, Inner}) ->
+    iolist_to_binary([~"array(", format_kura_type(Inner), ~")"]);
+format_kura_type({embed, Kind, Mod}) ->
+    iolist_to_binary([atom_to_binary(Kind), ~"(", atom_to_binary(Mod), ~")"]);
+format_kura_type(Other) ->
+    iolist_to_binary(io_lib:format("~p", [Other])).
+
+pool_stats_from_pid(PoolPid, PoolName) ->
+    try sys:get_state(PoolPid) of
+        {State, Tid, Codel} when is_atom(State), is_reference(Tid), is_map(Codel) ->
+            QueueSize = ets:info(Tid, size),
+            PoolSize = pool_size_from_sup(PoolName),
+            case State of
+                ready ->
+                    #{
+                        status => ~"ready",
+                        available => QueueSize,
+                        checked_out => max(0, PoolSize - QueueSize),
+                        queued => 0,
+                        delay => maps:get(delay, Codel, 0)
+                    };
+                busy ->
+                    #{
+                        status => ~"busy",
+                        available => 0,
+                        checked_out => PoolSize,
+                        queued => QueueSize,
+                        delay => maps:get(delay, Codel, 0)
+                    }
+            end;
+        _ ->
+            #{status => ~"unknown", available => 0, checked_out => 0, queued => 0}
+    catch
+        _:_ ->
+            #{status => ~"unknown", available => 0, checked_out => 0, queued => 0}
+    end.
+
+pool_size_from_sup(PoolName) ->
+    try
+        SupName = list_to_existing_atom(atom_to_list(PoolName) ++ "_sup"),
+        case whereis(SupName) of
+            undefined ->
+                0;
+            SupPid ->
+                ConnSup = find_connection_sup(SupPid),
+                case ConnSup of
+                    undefined ->
+                        0;
+                    Pid ->
+                        Counts = supervisor:count_children(Pid),
+                        proplists:get_value(active, Counts, 0)
+                end
+        end
+    catch
+        _:_ -> 0
+    end.
+
+find_connection_sup(SupPid) ->
+    try supervisor:which_children(SupPid) of
+        Children ->
+            case [Pid || {pgo_connection_sup, Pid, _, _} <- Children, is_pid(Pid)] of
+                [Pid | _] -> Pid;
+                [] -> undefined
+            end
+    catch
+        _:_ -> undefined
+    end.

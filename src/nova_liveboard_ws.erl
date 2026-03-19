@@ -59,6 +59,8 @@ view_resolver(#{path := Path}) ->
         <<"ports">> -> {view, nova_liveboard_ports_view, undefined, []};
         <<"supervisors">> -> {view, nova_liveboard_sup_view, undefined, []};
         <<"metrics">> -> {view, nova_liveboard_metrics_view, undefined, []};
+        <<"database">> -> {view, nova_liveboard_database_view, undefined, []};
+        <<"schemas">> -> {view, nova_liveboard_schemas_view, undefined, []};
         _ -> {view, nova_liveboard_system_view, undefined, []}
     end.
 
