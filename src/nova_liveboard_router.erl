@@ -3,15 +3,14 @@
 
 -export([routes/1]).
 
-routes(_Environment) ->
+routes(_Env) ->
     [
         #{
-            prefix => "",
+            prefix => nova_liveboard:prefix(),
             security => false,
             routes => [
-                {"/", fun nova_liveboard_page_controller:index/1, #{methods => [get]}},
-                {"/:page", fun nova_liveboard_page_controller:index/1, #{methods => [get]}},
-                {"/live", nova_liveboard_ws, #{protocol => ws}},
+                {~"/", fun nova_liveboard_controller:index/1, #{methods => [get]}},
+                {~"/:page", fun nova_liveboard_controller:index/1, #{methods => [get]}},
                 {"/assets/[...]", "static/assets"}
             ]
         }

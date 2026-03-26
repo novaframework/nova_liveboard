@@ -1,11 +1,11 @@
--module(nova_liveboard_page_controller).
+-module(nova_liveboard_controller).
 
--export([index/1]).
+-export([index/1, resolve_view/1]).
 
 -spec index(Req :: map()) -> {status, integer(), map(), iodata()}.
 index(CowboyReq) ->
     Path = cowboy_req:path(CowboyReq),
-    {ViewModule, MountArg} = resolve_view(Path),
+    {ViewModule, MountArg} = resolve_view_module(Path),
     ArizonaReq = arizona_cowboy_request:new(CowboyReq),
     try
         View = arizona_view:call_mount_callback(ViewModule, MountArg, ArizonaReq),
@@ -13,11 +13,16 @@ index(CowboyReq) ->
         {status, 200, #{<<"content-type">> => <<"text/html; charset=utf-8">>}, Html}
     catch
         Error:Reason:Stacktrace ->
-            logger:error("Liveboard render error: ~p:~p~n~p", [Error, Reason, Stacktrace]),
+            logger:error(~"Liveboard render error: ~p:~p~n~p", [Error, Reason, Stacktrace]),
             {status, 500, #{<<"content-type">> => <<"text/html">>}, <<"Internal Server Error">>}
     end.
 
-resolve_view(Path) ->
+-spec resolve_view(map()) -> {view, module(), term(), list()}.
+resolve_view(#{path := Path}) ->
+    {ViewModule, MountArg} = resolve_view_module(Path),
+    {view, ViewModule, MountArg, []}.
+
+resolve_view_module(Path) ->
     case page_from_path(Path) of
         <<"processes">> -> {nova_liveboard_processes_view, undefined};
         <<"ets">> -> {nova_liveboard_ets_view, undefined};
@@ -31,23 +36,23 @@ resolve_view(Path) ->
     end.
 
 page_from_path(Path) ->
+    Pages = [
+        <<"processes">>,
+        <<"ets">>,
+        <<"applications">>,
+        <<"ports">>,
+        <<"supervisors">>,
+        <<"metrics">>,
+        <<"database">>,
+        <<"schemas">>
+    ],
     case binary:split(Path, <<"/">>, [global, trim_all]) of
         [] ->
             <<"system">>;
         Parts ->
             Last = lists:last(Parts),
-            case view_for_page(Last) of
+            case lists:member(Last, Pages) of
                 true -> Last;
                 false -> <<"system">>
             end
     end.
-
-view_for_page(<<"processes">>) -> true;
-view_for_page(<<"ets">>) -> true;
-view_for_page(<<"applications">>) -> true;
-view_for_page(<<"ports">>) -> true;
-view_for_page(<<"supervisors">>) -> true;
-view_for_page(<<"metrics">>) -> true;
-view_for_page(<<"database">>) -> true;
-view_for_page(<<"schemas">>) -> true;
-view_for_page(_) -> false.

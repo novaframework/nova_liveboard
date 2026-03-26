@@ -21,7 +21,8 @@ mount(_Arg, _Req) ->
         {nova_liveboard_layout, render, main_content, #{
             active_page => ~"processes",
             prefix => Prefix,
-            ws_path => <<Prefix/binary, "/live">>
+            ws_path => <<(arizona_nova:prefix())/binary, "/live">>,
+            arizona_prefix => arizona_nova:prefix()
         }},
     arizona_view:new(?MODULE, Bindings, Layout).
 
