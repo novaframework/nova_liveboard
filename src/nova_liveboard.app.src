@@ -2,6 +2,7 @@
     {description, "Real-time BEAM VM dashboard for Nova"},
     {vsn, git},
     {registered, []},
+    {mod, {nova_liveboard_app, []}},
     {applications, [
         kernel,
         stdlib,
@@ -9,7 +10,9 @@
         arizona_core,
         arizona_nova
     ]},
-    {env, []},
+    {env, [
+        {nova_apps, [arizona_nova]}
+    ]},
     {modules, []},
     {licenses, ["Apache-2.0"]}
 ]}.

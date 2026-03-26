@@ -16,7 +16,7 @@ render(Bindings) ->
         <title>Nova Liveboard</title>
         <link rel="stylesheet" href="{arizona_template:get_binding(prefix, Bindings)}/assets/css/liveboard.css" />
         <script type="module">
-            import Arizona from '{arizona_template:get_binding(prefix, Bindings)}/assets/js/arizona.min.js';
+            import Arizona from '{arizona_template:get_binding(arizona_prefix, Bindings)}/assets/js/arizona.min.js';
             globalThis.arizona = new Arizona();
             arizona.connect('{arizona_template:get_binding(ws_path, Bindings)}');
         </script>
