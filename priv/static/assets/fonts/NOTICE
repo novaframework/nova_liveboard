@@ -1,0 +1,13 @@
+Self-hosted web fonts for gakudan_liveboard.
+
+These WOFF2 files are bundled so the dashboard makes no off-origin requests
+(GDPR by design). They are fetched by scripts/fetch-fonts.sh. Both families are
+licensed under the SIL Open Font License 1.1 (OFL), which permits bundling and
+redistribution:
+
+- IBM Plex Mono   - (c) IBM Corp.            - https://github.com/IBM/plex
+- Instrument Serif- (c) Rosetta Type / Instrument - https://github.com/Instrument/instrument-serif
+
+SIL OFL 1.1: https://openfontlicense.org/
+
+Latin subset only; regenerate with `make fonts` (scripts/fetch-fonts.sh).
