@@ -1,0 +1,26 @@
+name: Erlang CI
+on:
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+  push:
+    branches: [master]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  ci:
+    uses: Taure/erlang-ci/.github/workflows/ci.yml@v2.1.1
+    with:
+      otp-version: '29'
+      enable-ex-doc: true
+      # fmt/xref/dialyzer/eunit/summary are on by default. audit + sbom are left
+      # off (their defaults): with this repo's `{vsn, git}` deps, rebar3_sbom
+      # badarg's on the `git` atom version and rebar3_audit crashes formatting a
+      # LOW-advisory glyph under OTP 29. Re-enable once the plugins handle it.

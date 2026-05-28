@@ -22,6 +22,22 @@
     kura_schemas/1
 ]).
 
+%% These functions either call Kura's optional, runtime-detected API
+%% (kura_repo/kura_schema/kura_migrator are not dependencies) or work with ETS
+%% opaque tids and the undocumented scheduler_wall_time_all tuple; both are
+%% unresolvable for dialyzer by design, so the warnings are suppressed at source.
+-dialyzer(
+    {nowarn_function, [
+        scheduler_info/0,
+        kura_repo_info/1,
+        kura_migration_status/1,
+        schema_info/1,
+        format_ets_id/1,
+        scheduler_wall_time/0,
+        pool_stats_from_pid/2
+    ]}
+).
+
 -spec system_info() -> map().
 system_info() ->
     {Total, Allocated, _Worst} = memsup_or_vm_memory(),
@@ -35,6 +51,7 @@ system_info() ->
         port_limit => erlang:system_info(port_limit),
         atom_count => erlang:system_info(atom_count),
         atom_limit => erlang:system_info(atom_limit),
+        run_queue => erlang:statistics(run_queue),
         ets_count => length(ets:all()),
         scheduler_count => erlang:system_info(schedulers),
         scheduler_online => erlang:system_info(schedulers_online),

@@ -1,18 +1,20 @@
 {application, nova_liveboard, [
-    {description, "Real-time BEAM VM dashboard for Nova"},
+    {description, "Real-time BEAM VM dashboard for Nova (Nova + Datastar)"},
     {vsn, git},
-    {registered, []},
+    {registered, [nova_liveboard_tracer]},
     {mod, {nova_liveboard_app, []}},
     {applications, [
         kernel,
         stdlib,
         nova,
-        arizona_core,
-        arizona_nova
+        datastar
     ]},
     {env, [
-        {nova_apps, [arizona_nova]}
+        {prefix, "/liveboard"},
+        {refresh_ms, 2000},
+        {request_buffer, 200}
     ]},
     {modules, []},
-    {licenses, ["Apache-2.0"]}
+    {licenses, ["Apache-2.0"]},
+    {links, [{"GitHub", "https://github.com/novaframework/nova_liveboard"}]}
 ]}.

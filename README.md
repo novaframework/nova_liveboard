@@ -1,62 +1,74 @@
-# Nova Liveboard
+# nova_liveboard
 
-Real-time BEAM VM dashboard for [Nova](https://github.com/novaframework/nova) — the Erlang equivalent of Phoenix LiveDashboard.
+Real-time BEAM VM dashboard for [Nova](https://novaframework.org) - a
+self-hosted, dependency-light "mission control" for a running node. Built on
+**Nova + [Datastar](https://data-star.dev)**: server-rendered HTML, live
+updates over SSE, no JavaScript build step, no off-origin requests.
 
-Built on [Arizona](https://github.com/Taure/arizona_core) for live differential rendering over WebSocket.
+## What it shows
 
-## Pages
+| Page | Live view |
+|------|-----------|
+| Overview | OTP/ERTS, schedulers, capacity gauges, memory breakdown |
+| Metrics | sparklines (memory, run queue, IO) + scheduler utilisation |
+| Processes | top processes by memory / reductions / message queue |
+| Requests | every HTTP request the node handles, streaming in live, with an opt-in deep trace of the **processes each request spawns** |
+| Supervisors | the live supervision tree per application |
+| Applications / ETS / Ports | running apps, ETS tables, open ports |
+| Database / Schemas | Kura repos, pools and schemas (when Kura is present) |
 
-| Page | Description | Refresh |
-|------|-------------|---------|
-| **System** | OTP release, uptime, schedulers, memory breakdown with usage bars | 2s |
-| **Processes** | Top 50 processes by memory/reductions/message queue, sortable | 2s |
-| **ETS** | All ETS tables with type, protection, size, memory, owner | 3s |
-| **Applications** | Running applications with versions | 5s |
-| **Ports** | Open ports with I/O stats | 3s |
-| **Supervisors** | App selector with supervision tree visualization | 5s |
-| **Metrics** | Live sparkline charts (memory, processes, IO, run queue) + scheduler utilization bars | 2s |
+The vitals deck across the top stays live on every page.
 
-## Setup
+## Install
 
-Add to your Nova application's `rebar.config`:
+Add it as a Nova app in your release and mount it via `nova_apps`:
 
 ```erlang
 {deps, [
-    {nova_liveboard, {git, "https://github.com/novaframework/nova_liveboard.git", {branch, "master"}}}
+    {nova_liveboard,
+        {git, "https://github.com/novaframework/nova_liveboard.git", {branch, "master"}}}
 ]}.
 ```
 
-Add `nova_liveboard` to your application's dependencies in your `.app.src`:
-
 ```erlang
-{applications, [kernel, stdlib, nova, nova_liveboard]}
+%% your sys.config
+{your_app, [{nova_apps, [nova_liveboard]}]}.
+{nova_liveboard, [{prefix, "/liveboard"}]}.
 ```
 
-Configure the liveboard in your `sys.config`:
+Open `/liveboard`.
+
+## Request tracing
+
+The Requests page needs the tracing plugin, registered globally so it sees
+every route on the node:
 
 ```erlang
-{nova, [
-    {nova_apps, [
-        #{name => nova_liveboard, prefix => "/liveboard"}
-    ]}
-]}
+{nova, [{plugins, [
+    {pre_request,  nova_liveboard_trace_plugin, #{}},
+    {post_request, nova_liveboard_trace_plugin, #{}}
+]}]}.
 ```
 
-Visit `http://localhost:8080/liveboard` in your browser.
+The request feed (method, path, status, duration, reductions, handler) is
+always on and cheap. "Arm next 10" turns on scoped process tracing for the next
+few requests, so you can open a request and see the exact tree of processes it
+spawned - overhead is only paid while armed.
 
-## Dependencies
+## Configuration
 
-- [Nova](https://github.com/novaframework/nova) — Erlang web framework
-- [Arizona Core](https://github.com/Taure/arizona_core) — Live view engine with compile-time template optimization
-- [Arizona Nova](https://github.com/Taure/arizona_nova) — Bridge between Arizona and Nova (WebSocket controller, PubSub)
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `prefix` | `"/liveboard"` | mount path |
+| `refresh_ms` | `2000` | repaint interval for polled streams |
+| `request_buffer` | `200` | recent requests retained |
 
-## Architecture
+## Privacy
 
-- **Data layer** (`nova_liveboard_data`) — Pure functions collecting VM metrics, supervision trees, scheduler wall time deltas, sparkline point generation
-- **Views** — Arizona views with `arizona_parse_transform` for compile-time template optimization
-- **WebSocket** — Thin wrapper around `arizona_nova_websocket` with `flatten_reply` to bridge Arizona's list-based frame replies to Nova's single-frame `handle_ws` callback
-- **Routing** — Nova router with WebSocket route defined after `/:page` to ensure `routing_tree` matches the exact `/live` path before the binding
+Fonts, CSS and datastar.js are all self-hosted under `priv/static/assets`, and
+the dashboard sends a strict `Content-Security-Policy` of `default-src 'self'`.
+Nothing is fetched off-origin.
 
-## License
+## Licence
 
-Apache-2.0
+Apache-2.0.
