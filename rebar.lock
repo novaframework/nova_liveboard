@@ -9,7 +9,7 @@
  {<<"jhn_stdlib">>,{pkg,<<"jhn_stdlib">>,<<"5.11.2">>},1},
  {<<"nova">>,
   {git,"https://github.com/novaframework/nova.git",
-       {ref,"9ee7e21ef5f82c9c8b71b0ff6bf0ace08d8b72a3"}},
+       {ref,"7f024aef8208b6affd855bdc51ea044323b640d2"}},
   0},
  {<<"ranch">>,{pkg,<<"ranch">>,<<"2.2.0">>},2},
  {<<"routing_tree">>,{pkg,<<"routing_tree">>,<<"1.0.11">>},1},
