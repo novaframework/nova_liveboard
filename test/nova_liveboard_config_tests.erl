@@ -83,7 +83,7 @@ other_values_are_named() ->
                 ~"/liveboard/",
                 ["/live", ~"board"],
                 [$/, a],
-                [$/ | $a],
+                improper($/, $a),
                 {~"/liveboard"}
             ]},
             {refresh_ms, [0, -1, 1.5, infinity, ~"2000", "2000", undefined]},
@@ -109,7 +109,7 @@ other_values_are_named() ->
                 [~"https://ops.example.com/"],
                 [~"https://ops.example.com/board"],
                 [~"https://ops.example.com", ops],
-                [~"https://ops.example.com" | ~"https://b.example.com"],
+                improper(~"https://ops.example.com", ~"https://b.example.com"),
                 undefined
             ]}
         ],
@@ -163,7 +163,7 @@ accessors_fall_back_to_the_default() ->
             application:set_env(nova_liveboard, prefix, Value),
             ?assertEqual({Value, ~"/liveboard"}, {Value, nova_liveboard:prefix()})
         end
-     || Value <- [liveboard, 42, [$/, a], [$/ | $a], {~"/liveboard"}, undefined]
+     || Value <- [liveboard, 42, [$/, a], improper($/, $a), {~"/liveboard"}, undefined]
     ],
     [
         begin
@@ -222,6 +222,13 @@ nova_does_not_start_on_an_invalid_setting_test() ->
     ?assertEqual(undefined, whereis(nova_liveboard_sup)).
 
 %% ---------------------------------------------------------------------------
+
+%% `[Head | Tail]` where the tail is not a list. eqWAlizer has no type for
+%% the literal, so the cell comes out of the external term format.
+-spec improper(term(), term()) -> term().
+improper(Head, Tail) ->
+    <<131, 104, 2, Elements/binary>> = term_to_binary({Head, Tail}),
+    binary_to_term(<<131, 108, 1:32, Elements/binary>>).
 
 mount_failure() ->
     try nova_liveboard_router:routes(dev) of

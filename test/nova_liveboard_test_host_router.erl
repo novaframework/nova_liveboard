@@ -3,5 +3,6 @@
 
 -export([routes/1]).
 
+-spec routes(atom()) -> [map()].
 routes(_Env) ->
     [].

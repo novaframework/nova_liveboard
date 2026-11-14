@@ -169,7 +169,11 @@ ports_test_() ->
             {Port, list_to_binary(Secret)}
         end,
         fun({Port, _Secret}) ->
-            catch port_close(Port),
+            try
+                port_close(Port)
+            catch
+                error:badarg -> true
+            end,
             application:unset_env(nova_liveboard, redact)
         end,
         fun({_Port, Secret}) ->

@@ -113,31 +113,39 @@ read(Socket, Deadline, Acc) ->
             {open, Acc}
     end.
 
+-spec read_until_closed(gen_tcp:socket(), binary()) -> binary().
 read_until_closed(Socket, Acc) ->
     case gen_tcp:recv(Socket, 0, 5000) of
         {ok, Data} when is_binary(Data) -> read_until_closed(Socket, <<Acc/binary, Data/binary>>);
         _ -> Acc
     end.
 
+-spec header_lines([{iodata(), iodata()}]) -> iodata().
 header_lines(Headers) ->
     [~"host: board.test\r\n" | [[Name, ~": ", Value, ~"\r\n"] || {Name, Value} <- Headers]].
 
+-spec parse(binary()) -> response().
 parse(Raw) ->
     {ok, {http_response, _Version, Status, _Reason}, Rest} =
         erlang:decode_packet(http_bin, Raw, []),
     parse_headers(Status, Rest, []).
 
+-spec parse_headers(pos_integer(), binary(), [{binary(), binary()}]) -> response().
 parse_headers(Status, Raw, Headers) ->
     case erlang:decode_packet(httph_bin, Raw, []) of
-        {ok, {http_header, _, Name, _, Value}, Rest} ->
+        {ok, {http_header, _, Name, _, Value}, Rest} when
+            is_binary(Value), is_atom(Name) orelse is_binary(Name)
+        ->
             parse_headers(Status, Rest, [{header_name(Name), Value} | Headers]);
         {ok, http_eoh, Body} ->
             {Status, Headers, Body}
     end.
 
+-spec header_name(atom() | binary()) -> binary().
 header_name(Name) when is_atom(Name) -> string:lowercase(atom_to_binary(Name));
 header_name(Name) when is_binary(Name) -> string:lowercase(Name).
 
+-spec free_port() -> inet:port_number().
 free_port() ->
     {ok, Listen} = gen_tcp:listen(0, [{ip, {127, 0, 0, 1}}]),
     {ok, Port} = inet:port(Listen),

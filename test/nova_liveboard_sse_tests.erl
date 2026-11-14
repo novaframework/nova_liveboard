@@ -273,7 +273,7 @@ a_failing_view_does_not_stop_the_others() ->
     ?POLLER ! tick,
     ?assert(is_binary(frame_from(Working))),
     ?assertEqual([], frames_of(Broken)),
-    ?assert(is_process_alive(whereis(?POLLER))),
+    ?assert(alive(?POLLER)),
     ok = logger:set_primary_config(level, Level).
 
 ticks_follow_the_refresh_interval() ->
@@ -379,20 +379,19 @@ frames_of(Viewer) ->
 client_is_the_identity_from_auth_test() ->
     Peer = {{192, 0, 2, 1}, 50000},
     Operator = #{user => ~"operator", session => ~"correct horse battery staple"},
-    {identity, Digest} = Client = nova_liveboard_sse:client(#{auth_data => Operator, peer => Peer}),
+    {identity, Digest} = Client = nova_liveboard_sse:client(request(Operator, Peer)),
     ?assertEqual(
-        Client,
-        nova_liveboard_sse:client(#{auth_data => Operator, peer => {{198, 51, 100, 9}, 1234}})
+        Client, nova_liveboard_sse:client(request(Operator, {{198, 51, 100, 9}, 1234}))
     ),
     ?assertNotEqual(
-        Client, nova_liveboard_sse:client(#{auth_data => Operator#{user => ~"other"}, peer => Peer})
+        Client, nova_liveboard_sse:client(request(Operator#{user => ~"other"}, Peer))
     ),
     ?assertEqual(32, byte_size(Digest)),
     ?assertEqual(nomatch, binary:match(term_to_binary(Client), ~"horse")).
 
 client_is_the_address_without_an_identity_test_() ->
     [
-        ?_assertEqual({peer, Address}, nova_liveboard_sse:client(#{peer => {Seen, Port}}))
+        ?_assertEqual({peer, Address}, nova_liveboard_sse:client(request({Seen, Port})))
      || {Seen, Port, Address} <- [
             {{192, 0, 2, 1}, 50000, {192, 0, 2, 1}},
             {{192, 0, 2, 1}, 50001, {192, 0, 2, 1}},
@@ -619,3 +618,37 @@ wait_until(Condition, Attempts) ->
             timer:sleep(20),
             wait_until(Condition, Attempts - 1)
     end.
+
+-spec alive(atom()) -> boolean().
+alive(Name) ->
+    case whereis(Name) of
+        Pid when is_pid(Pid) -> is_process_alive(Pid);
+        _ -> false
+    end.
+
+%% A request as Cowboy hands it over, and as Nova does once the `auth`
+%% callback has returned `{true, AuthData}`.
+-spec request({inet:ip_address(), inet:port_number()}) -> cowboy_req:req().
+request(Peer) ->
+    #{
+        method => ~"GET",
+        version => 'HTTP/1.1',
+        scheme => ~"http",
+        host => ~"board.test",
+        port => 80,
+        path => ~"/liveboard/sse/ets",
+        qs => ~"",
+        headers => #{},
+        peer => Peer,
+        sock => {{127, 0, 0, 1}, 80},
+        cert => undefined,
+        ref => nova_listener,
+        pid => self(),
+        streamid => 1,
+        has_body => false,
+        body_length => 0
+    }.
+
+-spec request(term(), {inet:ip_address(), inet:port_number()}) -> cowboy_req:req().
+request(AuthData, Peer) ->
+    (request(Peer))#{auth_data => AuthData}.

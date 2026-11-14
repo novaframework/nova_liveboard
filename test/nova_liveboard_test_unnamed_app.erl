@@ -22,8 +22,11 @@ load() ->
         ]}
     ).
 
+-spec start(application:start_type(), term()) -> {ok, pid()}.
 start(_Type, _Args) ->
-    supervisor:start_link(nova_liveboard_test_redact, []).
+    {ok, Supervisor} = supervisor:start_link(nova_liveboard_test_redact, []),
+    {ok, Supervisor}.
 
+-spec stop(term()) -> ok.
 stop(_State) ->
     ok.
