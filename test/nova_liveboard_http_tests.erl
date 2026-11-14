@@ -52,5 +52,32 @@ unknown_is_not_found(Server) ->
     ?assertEqual(404, ?SERVER:status(?SERVER:request(Server, get_request(~"/liveboard/nope")))),
     ?assertEqual(404, ?SERVER:status(?SERVER:request(Server, get_request(~"/")))).
 
+requests_page_test_() ->
+    {foreach, fun() -> application:unset_env(nova, plugins) end,
+        fun(_) -> application:unset_env(nova, plugins) end, [
+            {"the requests page explains the plugin when no route has it", fun() ->
+                Page = requests_page(),
+                ?assertNotEqual(nomatch, binary:match(Page, ~"request tracing is off")),
+                ?assertEqual(nomatch, binary:match(Page, ~"id=\"req-feed\""))
+            end},
+            {"the requests page shows the feed when Nova runs the plugin", fun() ->
+                application:set_env(nova, plugins, [
+                    {pre_request, nova_liveboard_trace_plugin, #{}},
+                    {post_request, nova_liveboard_trace_plugin, #{}}
+                ]),
+                Page = requests_page(),
+                ?assertEqual(nomatch, binary:match(Page, ~"request tracing is off")),
+                ?assertNotEqual(nomatch, binary:match(Page, ~"id=\"req-feed\""))
+            end}
+        ]}.
+
+requests_page() ->
+    Server = ?SERVER:start([{auth, none}]),
+    try
+        ?SERVER:body(?SERVER:request(Server, get_request(~"/liveboard/requests")))
+    after
+        ?SERVER:stop(Server)
+    end.
+
 get_request(Path) ->
     [~"GET ", Path, ~" HTTP/1.1"].

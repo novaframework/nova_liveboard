@@ -129,9 +129,9 @@ app_names() ->
 
 -spec default_app([atom()]) -> atom().
 default_app(Names) ->
-    case application:get_env(nova, bootstrap_application) of
+    case nova:get_main_app() of
         {ok, App} -> App;
-        _ -> first_user_app(Names)
+        undefined -> first_user_app(Names)
     end.
 
 %% ---------------------------------------------------------------------------
@@ -174,19 +174,18 @@ first_user_app(Names) ->
         [] -> nova_liveboard
     end.
 
-%% Tracing is "on" if the plugin is in Nova's config, or the tracer has already
-%% captured something (covers runtime registration).
+%% Tracing is "on" if Nova has put the plugin on a route, or the tracer has
+%% already captured something.
+-spec tracing_enabled() -> boolean().
 tracing_enabled() ->
-    plugin_in_config() orelse safe_active().
+    plugin_on_a_route() orelse safe_active().
 
-plugin_in_config() ->
-    lists:any(
-        fun
-            ({_Type, Mod, _Opts}) -> Mod =:= nova_liveboard_trace_plugin;
-            (_) -> false
-        end,
-        application:get_env(nova, plugins, [])
-    ).
+-spec plugin_on_a_route() -> boolean().
+plugin_on_a_route() ->
+    case nova_router:plugins() of
+        Plugins when is_list(Plugins) -> lists:member(nova_liveboard_trace_plugin, Plugins);
+        _ -> false
+    end.
 
 safe_active() ->
     whereis(nova_liveboard_tracer) =/= undefined andalso nova_liveboard_tracer:active().

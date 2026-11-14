@@ -151,7 +151,7 @@ points(Frame) ->
     length(binary:split(Points, ~" ", [global])).
 
 requests_repaint_once_per_burst() ->
-    application:set_env(nova, plugins, [{pre_request, nova_liveboard_trace_plugin, #{}}]),
+    persistent_term:put(nova_plugins, [nova_liveboard_trace_plugin]),
     Viewers = [viewer({requests, undefined}) || _ <- lists:seq(1, 4)],
     _ = [frame_from(Viewer) || Viewer <- Viewers],
     ?assertEqual(1, renders()),
@@ -170,7 +170,7 @@ requests_repaint_once_per_burst() ->
      || N <- lists:seq(1, 150)
     ],
     [Frame | _] = Frames = [frame_from(Viewer) || Viewer <- Viewers],
-    application:unset_env(nova, plugins),
+    _ = persistent_term:erase(nova_plugins),
     ?assertEqual([Frame], lists:usort(Frames)),
     ?assert(contains(Frame, ~"/burst/150")),
     ?assert(contains(Frame, ~"selector #page")),

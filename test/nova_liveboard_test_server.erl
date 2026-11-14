@@ -51,6 +51,7 @@ stop(#{env := Keys, level := Level}) ->
     %% be served by the routes of an earlier one.
     _ = persistent_term:erase(nova_dispatch),
     _ = persistent_term:erase(nova_apps),
+    _ = persistent_term:erase(nova_plugins),
     [application:unset_env(nova_liveboard, Key) || Key <- Keys],
     application:unset_env(nova, bootstrap_application),
     application:unset_env(nova, cowboy_configuration),
