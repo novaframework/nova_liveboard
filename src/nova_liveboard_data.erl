@@ -22,25 +22,134 @@
     kura_schemas/1
 ]).
 
-%% These functions either call Kura's optional, runtime-detected API
-%% (kura_repo/kura_schema/kura_migrator are not dependencies) or work with ETS
-%% opaque tids and the undocumented scheduler_wall_time_all tuple; both are
-%% unresolvable for dialyzer by design, so the warnings are suppressed at source.
--dialyzer(
-    {nowarn_function, [
-        scheduler_info/0,
-        kura_repo_info/1,
-        kura_migration_status/1,
-        schema_info/1,
-        format_ets_id/1,
-        scheduler_wall_time/0,
-        pool_stats_from_pid/2
-    ]}
-).
+-type sort_key() :: memory | reductions | message_queue_len.
+-type memory() :: #{
+    total := non_neg_integer(),
+    processes := non_neg_integer(),
+    processes_used := non_neg_integer(),
+    system := non_neg_integer(),
+    atom := non_neg_integer(),
+    atom_used := non_neg_integer(),
+    binary := non_neg_integer(),
+    code := non_neg_integer(),
+    ets := non_neg_integer()
+}.
+-type system() :: #{
+    otp_release := binary(),
+    erts_version := binary(),
+    system_architecture := binary(),
+    process_count := non_neg_integer(),
+    process_limit := pos_integer(),
+    port_count := non_neg_integer(),
+    port_limit := pos_integer(),
+    atom_count := pos_integer(),
+    atom_limit := pos_integer(),
+    run_queue := non_neg_integer(),
+    ets_count := non_neg_integer(),
+    scheduler_count := pos_integer(),
+    scheduler_online := pos_integer(),
+    uptime := non_neg_integer(),
+    total_memory := non_neg_integer(),
+    allocated_memory := non_neg_integer(),
+    memory := memory()
+}.
+-type process() :: #{
+    pid := binary(),
+    name := binary(),
+    memory := non_neg_integer(),
+    reductions := non_neg_integer(),
+    message_queue_len := non_neg_integer(),
+    current_function := binary(),
+    initial_call := binary(),
+    status := binary()
+}.
+-type ets_table() :: #{
+    id := binary(),
+    name := binary(),
+    size := non_neg_integer(),
+    memory_words := non_neg_integer(),
+    memory_bytes := non_neg_integer(),
+    owner := binary(),
+    type := binary(),
+    protection := binary()
+}.
+-type application() :: #{name := binary(), description := binary(), version := binary()}.
+-type open_port() :: #{
+    id := binary(),
+    name := binary(),
+    connected := binary(),
+    input := non_neg_integer(),
+    output := non_neg_integer()
+}.
+-type scheduler() :: #{id := pos_integer(), active := non_neg_integer()}.
+-type child() :: #{
+    type := supervisor | worker,
+    name := binary(),
+    pid := binary(),
+    status := binary(),
+    memory := non_neg_integer(),
+    message_queue_len := non_neg_integer(),
+    current_function := binary(),
+    children := [child()]
+}.
+-type wall_time() :: [{pos_integer(), non_neg_integer(), non_neg_integer()}].
+-type metrics() :: #{
+    total_memory := queue:queue(non_neg_integer()),
+    process_memory := queue:queue(non_neg_integer()),
+    binary_memory := queue:queue(non_neg_integer()),
+    process_count := queue:queue(non_neg_integer()),
+    run_queue := queue:queue(non_neg_integer()),
+    io_input := queue:queue(integer()),
+    io_output := queue:queue(integer()),
+    scheduler_util := [#{id := pos_integer(), util := float()}],
+    prev_io := {non_neg_integer(), non_neg_integer()},
+    prev_sched := wall_time(),
+    max_points := pos_integer()
+}.
+-type repo() :: #{
+    module := binary(),
+    database := term(),
+    hostname := term(),
+    port := term(),
+    pool_size := term(),
+    pool := term()
+}.
+-type pool_stats() :: #{
+    status := binary(),
+    available := non_neg_integer(),
+    checked_out := non_neg_integer(),
+    queued := non_neg_integer(),
+    delay => term()
+}.
+-type migration() :: #{version := binary(), module := binary(), status := binary()}.
+-type schema() :: #{
+    module := binary(),
+    table := term(),
+    fields := [#{name := binary(), type := binary(), primary_key := term(), virtual := term()}],
+    associations := [#{name := binary(), type := binary(), schema := binary()}],
+    indexes := [#{columns := [binary()], unique := term()}]
+}.
 
--spec system_info() -> map().
+-export_type([
+    sort_key/0,
+    memory/0,
+    system/0,
+    process/0,
+    ets_table/0,
+    application/0,
+    open_port/0,
+    scheduler/0,
+    child/0,
+    metrics/0,
+    repo/0,
+    pool_stats/0,
+    migration/0,
+    schema/0
+]).
+
+-spec system_info() -> system().
 system_info() ->
-    {Total, Allocated, _Worst} = memsup_or_vm_memory(),
+    Memory = memory_info(),
     #{
         otp_release => list_to_binary(erlang:system_info(otp_release)),
         erts_version => list_to_binary(erlang:system_info(version)),
@@ -55,130 +164,162 @@ system_info() ->
         ets_count => length(ets:all()),
         scheduler_count => erlang:system_info(schedulers),
         scheduler_online => erlang:system_info(schedulers_online),
-        uptime => element(1, erlang:statistics(wall_clock)),
-        total_memory => Total,
-        allocated_memory => Allocated,
-        memory => memory_info()
+        uptime => uptime(),
+        total_memory => maps:get(total, Memory),
+        allocated_memory => maps:get(total, Memory),
+        memory => Memory
     }.
 
--spec memory_info() -> map().
+-spec uptime() -> non_neg_integer().
+uptime() ->
+    {Total, _SinceLastCall} = erlang:statistics(wall_clock),
+    Total.
+
+-spec memory_info() -> memory().
 memory_info() ->
-    Mem = erlang:memory(),
+    Memory = erlang:memory(),
     #{
-        total => proplists:get_value(total, Mem),
-        processes => proplists:get_value(processes, Mem),
-        processes_used => proplists:get_value(processes_used, Mem),
-        system => proplists:get_value(system, Mem),
-        atom => proplists:get_value(atom, Mem),
-        atom_used => proplists:get_value(atom_used, Mem),
-        binary => proplists:get_value(binary, Mem),
-        code => proplists:get_value(code, Mem),
-        ets => proplists:get_value(ets, Mem)
+        total => bytes(total, Memory),
+        processes => bytes(processes, Memory),
+        processes_used => bytes(processes_used, Memory),
+        system => bytes(system, Memory),
+        atom => bytes(atom, Memory),
+        atom_used => bytes(atom_used, Memory),
+        binary => bytes(binary, Memory),
+        code => bytes(code, Memory),
+        ets => bytes(ets, Memory)
     }.
 
--spec top_processes(SortBy, Limit) -> [map()] when
-    SortBy :: memory | reductions | message_queue_len,
-    Limit :: pos_integer().
+-spec bytes(atom(), [{atom(), non_neg_integer()}]) -> non_neg_integer().
+bytes(Type, Memory) ->
+    case lists:keyfind(Type, 1, Memory) of
+        {Type, Bytes} -> Bytes;
+        false -> 0
+    end.
+
+-spec top_processes(sort_key(), pos_integer()) -> [process()].
 top_processes(SortBy, Limit) ->
-    Procs = erlang:processes(),
-    ProcInfos = lists:filtermap(
-        fun(Pid) ->
-            case
-                erlang:process_info(Pid, [
-                    registered_name,
-                    memory,
-                    reductions,
-                    message_queue_len,
-                    current_function,
-                    initial_call,
-                    status
-                ])
-            of
-                undefined ->
-                    false;
-                Info ->
-                    {true, proc_to_map(Pid, Info)}
-            end
-        end,
-        Procs
-    ),
+    Processes = [
+        process(Pid, Info)
+     || Pid <- erlang:processes(),
+        Info <- [
+            erlang:process_info(Pid, [
+                registered_name,
+                memory,
+                reductions,
+                message_queue_len,
+                current_function,
+                initial_call,
+                status
+            ])
+        ],
+        Info =/= undefined
+    ],
     Sorted = lists:sort(
-        fun(A, B) -> maps:get(SortBy, A) >= maps:get(SortBy, B) end,
-        ProcInfos
+        fun(A, B) -> sort_value(SortBy, A) >= sort_value(SortBy, B) end,
+        Processes
     ),
     lists:sublist(Sorted, Limit).
 
--spec ets_tables() -> [map()].
-ets_tables() ->
-    Tables = ets:all(),
-    lists:filtermap(
-        fun(Tab) ->
-            try
-                Info = ets:info(Tab),
-                case Info of
-                    undefined ->
-                        false;
-                    _ ->
-                        {true, #{
-                            id => format_ets_id(Tab),
-                            name => atom_to_binary(proplists:get_value(name, Info)),
-                            size => proplists:get_value(size, Info),
-                            memory_words => proplists:get_value(memory, Info),
-                            memory_bytes => proplists:get_value(memory, Info) *
-                                erlang:system_info(wordsize),
-                            owner => format_pid(proplists:get_value(owner, Info)),
-                            type => atom_to_binary(proplists:get_value(type, Info)),
-                            protection => atom_to_binary(proplists:get_value(protection, Info))
-                        }}
-                end
-            catch
-                _:_ -> false
-            end
-        end,
-        Tables
-    ).
+-spec sort_value(sort_key(), process()) -> non_neg_integer().
+sort_value(memory, #{memory := Memory}) -> Memory;
+sort_value(reductions, #{reductions := Reductions}) -> Reductions;
+sort_value(message_queue_len, #{message_queue_len := Length}) -> Length.
 
--spec running_applications() -> [map()].
+-spec ets_tables() -> [ets_table()].
+ets_tables() ->
+    [Table || Id <- ets:all(), {ok, Table} <- [ets_table(Id)]].
+
+%% A table can be deleted between `ets:all/0` and `ets:info/1`.
+-spec ets_table(ets:table()) -> {ok, ets_table()} | gone.
+ets_table(Id) ->
+    try ets:info(Id) of
+        undefined ->
+            gone;
+        Info ->
+            case
+                {
+                    proplists:get_value(name, Info),
+                    proplists:get_value(size, Info),
+                    proplists:get_value(memory, Info),
+                    proplists:get_value(owner, Info),
+                    proplists:get_value(type, Info),
+                    proplists:get_value(protection, Info)
+                }
+            of
+                {Name, Size, Words, Owner, Type, Protection} when
+                    is_atom(Name),
+                    is_integer(Size),
+                    Size >= 0,
+                    is_integer(Words),
+                    Words >= 0,
+                    is_pid(Owner),
+                    is_atom(Type),
+                    is_atom(Protection)
+                ->
+                    {ok, #{
+                        id => format_ets_id(Id),
+                        name => atom_to_binary(Name),
+                        size => Size,
+                        memory_words => Words,
+                        memory_bytes => Words * erlang:system_info(wordsize),
+                        owner => format_pid(Owner),
+                        type => atom_to_binary(Type),
+                        protection => atom_to_binary(Protection)
+                    }};
+                _ ->
+                    gone
+            end
+    catch
+        error:badarg -> gone
+    end.
+
+-spec running_applications() -> [application()].
 running_applications() ->
-    Apps = application:which_applications(),
     [
         #{
             name => atom_to_binary(Name),
-            description => unicode_binary(Desc),
-            version => unicode_binary(Vsn)
+            description => unicode_binary(Description),
+            version => unicode_binary(Version)
         }
-     || {Name, Desc, Vsn} <- lists:sort(Apps)
+     || {Name, Description, Version} <- lists:sort(application:which_applications())
     ].
 
--spec port_info() -> [map()].
+-spec port_info() -> [open_port()].
 port_info() ->
-    Ports = erlang:ports(),
-    lists:filtermap(
-        fun(Port) ->
-            try
-                Info = erlang:port_info(Port),
-                case Info of
-                    undefined ->
-                        false;
-                    _ ->
-                        {true, #{
-                            id => format_port(Port),
-                            name => nova_liveboard_redact:port_name(
-                                list_to_binary(proplists:get_value(name, Info, ""))
-                            ),
-                            connected => format_pid(proplists:get_value(connected, Info)),
-                            input => proplists:get_value(input, Info, 0),
-                            output => proplists:get_value(output, Info, 0)
-                        }}
-                end
-            catch
-                _:_ -> false
-            end
-        end,
-        Ports
-    ).
+    [Port || Id <- erlang:ports(), {ok, Port} <- [open_port(Id)]].
 
--spec scheduler_info() -> [map()].
+%% A port can be closed between `erlang:ports/0` and `erlang:port_info/2`.
+-spec open_port(port()) -> {ok, open_port()} | closed.
+open_port(Id) ->
+    try
+        {
+            erlang:port_info(Id, name),
+            erlang:port_info(Id, connected),
+            erlang:port_info(Id, input),
+            erlang:port_info(Id, output)
+        }
+    of
+        {{name, Name}, {connected, Connected}, {input, Input}, {output, Output}} ->
+            {ok, #{
+                id => format_port(Id),
+                name => nova_liveboard_redact:port_name(unicode_binary(Name)),
+                connected => format_pid(Connected),
+                input => Input,
+                output => Output
+            }};
+        _ ->
+            closed
+    catch
+        error:badarg -> closed
+    end.
+
+-doc """
+The active time of every scheduler, from `scheduler_wall_time_all`. Empty
+until the `scheduler_wall_time` flag is on, which `collect_metrics/1` turns
+on.
+""".
+-spec scheduler_info() -> [scheduler()].
 scheduler_info() ->
     case erlang:statistics(scheduler_wall_time_all) of
         undefined ->
@@ -187,93 +328,102 @@ scheduler_info() ->
             [#{id => Id, active => Active} || {Id, Active, _Total} <- lists:sort(Schedulers)]
     end.
 
--spec supervision_tree(atom()) -> {ok, list()} | {error, term()}.
+-spec supervision_tree(atom()) -> {ok, [child()]} | {error, no_supervisor}.
 supervision_tree(AppName) ->
     case find_top_supervisor(AppName) of
         undefined -> {error, no_supervisor};
         Pid -> {ok, build_tree(Pid)}
     end.
 
--spec collect_metrics(undefined | map()) -> map().
+-spec collect_metrics(undefined | metrics()) -> metrics().
 collect_metrics(undefined) ->
-    erlang:system_flag(scheduler_wall_time, true),
-    Mem = erlang:memory(),
+    _ = erlang:system_flag(scheduler_wall_time, true),
+    Memory = erlang:memory(),
     {{input, In}, {output, Out}} = erlang:statistics(io),
-    SchedWall = scheduler_wall_time(),
     #{
-        total_memory => queue:from_list([proplists:get_value(total, Mem)]),
-        process_memory => queue:from_list([proplists:get_value(processes, Mem)]),
-        binary_memory => queue:from_list([proplists:get_value(binary, Mem)]),
+        total_memory => queue:from_list([bytes(total, Memory)]),
+        process_memory => queue:from_list([bytes(processes, Memory)]),
+        binary_memory => queue:from_list([bytes(binary, Memory)]),
         process_count => queue:from_list([erlang:system_info(process_count)]),
         run_queue => queue:from_list([erlang:statistics(run_queue)]),
         io_input => queue:from_list([0]),
         io_output => queue:from_list([0]),
         scheduler_util => [],
         prev_io => {In, Out},
-        prev_sched => SchedWall,
+        prev_sched => scheduler_wall_time(),
         max_points => 60
     };
 collect_metrics(
-    #{max_points := MaxPts, prev_io := {PrevIn, PrevOut}, prev_sched := PrevSched} = State
+    #{
+        total_memory := TotalMemory,
+        process_memory := ProcessMemory,
+        binary_memory := BinaryMemory,
+        process_count := ProcessCount,
+        run_queue := RunQueue,
+        io_input := Input,
+        io_output := Output,
+        prev_io := {PrevIn, PrevOut},
+        prev_sched := PrevSched,
+        max_points := Max
+    } = Metrics
 ) ->
-    Mem = erlang:memory(),
+    Memory = erlang:memory(),
     {{input, In}, {output, Out}} = erlang:statistics(io),
     SchedWall = scheduler_wall_time(),
-    SchedUtil = calc_sched_util(PrevSched, SchedWall),
-    Append = fun(Key, Val, S) ->
-        Q0 = maps:get(Key, S),
-        Q1 = queue:in(Val, Q0),
-        Q2 =
-            case queue:len(Q1) > MaxPts of
-                true -> element(2, queue:out(Q1));
-                false -> Q1
-            end,
-        maps:put(Key, Q2, S)
-    end,
-    S1 = Append(total_memory, proplists:get_value(total, Mem), State),
-    S2 = Append(process_memory, proplists:get_value(processes, Mem), S1),
-    S3 = Append(binary_memory, proplists:get_value(binary, Mem), S2),
-    S4 = Append(process_count, erlang:system_info(process_count), S3),
-    S5 = Append(run_queue, erlang:statistics(run_queue), S4),
-    S6 = Append(io_input, In - PrevIn, S5),
-    S7 = Append(io_output, Out - PrevOut, S6),
-    S7#{prev_io => {In, Out}, prev_sched => SchedWall, scheduler_util => SchedUtil}.
+    Metrics#{
+        total_memory := sampled(bytes(total, Memory), TotalMemory, Max),
+        process_memory := sampled(bytes(processes, Memory), ProcessMemory, Max),
+        binary_memory := sampled(bytes(binary, Memory), BinaryMemory, Max),
+        process_count := sampled(erlang:system_info(process_count), ProcessCount, Max),
+        run_queue := sampled(erlang:statistics(run_queue), RunQueue, Max),
+        io_input := sampled(In - PrevIn, Input, Max),
+        io_output := sampled(Out - PrevOut, Output, Max),
+        scheduler_util := calc_sched_util(PrevSched, SchedWall),
+        prev_io := {In, Out},
+        prev_sched := SchedWall
+    }.
 
--spec sparkline_points(list(), number(), number()) -> binary().
+%% `Samples` with `Sample` added, holding at most the newest `Max`.
+-spec sampled(Sample, queue:queue(Sample), pos_integer()) -> queue:queue(Sample).
+sampled(Sample, Samples, Max) ->
+    Added = queue:in(Sample, Samples),
+    case queue:len(Added) > Max of
+        true -> queue:drop(Added);
+        false -> Added
+    end.
+
+-spec sparkline_points([number()], number(), number()) -> binary().
 sparkline_points([], _Width, _Height) ->
     ~"";
 sparkline_points([_], Width, Height) ->
     iolist_to_binary(io_lib:format("0,~.1f ~.1f,~.1f", [Height / 2.0, float(Width), Height / 2.0]));
 sparkline_points(Values, Width, Height) ->
     Min = lists:min(Values),
-    Max = lists:max(Values),
     Range =
-        case Max - Min of
+        case lists:max(Values) - Min of
             Flat when Flat == 0 -> 1;
-            R -> R
+            Spread -> Spread
         end,
-    Len = length(Values),
-    Step = Width / max(1, Len - 1),
-    {Points, _} = lists:foldl(
-        fun(V, {Acc, I}) ->
-            X = I * Step,
-            Y = Height - ((V - Min) / Range * Height),
-            Pt = io_lib:format("~.1f,~.1f", [float(X), float(Y)]),
-            Sep =
-                case Acc of
-                    [] -> [];
-                    _ -> [Acc, " "]
-                end,
-            {[Sep, Pt], I + 1}
-        end,
-        {[], 0},
-        Values
-    ),
-    iolist_to_binary(Points).
+    Step = Width / (length(Values) - 1),
+    iolist_to_binary(points(Values, 0, Step, Min, Range, Height)).
+
+-spec points([number(), ...], non_neg_integer(), float(), number(), number(), number()) ->
+    iolist().
+points([Value | Rest], Index, Step, Min, Range, Height) ->
+    Point = io_lib:format("~.1f,~.1f", [
+        float(Index * Step), float(Height - ((Value - Min) / Range * Height))
+    ]),
+    case Rest of
+        [] -> [Point];
+        [_ | _] -> [Point, " " | points(Rest, Index + 1, Step, Min, Range, Height)]
+    end.
 
 %%----------------------------------------------------------------------
 %% Kura
 %%----------------------------------------------------------------------
+
+%% Kura is not a dependency: it is looked for in the running node and called
+%% only when it is there, so what it answers is checked before it is used.
 
 -spec kura_available() -> boolean().
 kura_available() ->
@@ -291,13 +441,17 @@ kura_repos() ->
             [
                 M
              || {M, _} <- code:all_loaded(),
-                is_kura_repo(M)
+                has_behaviour(M, kura_repo)
             ]
     end.
 
--spec kura_repo_info(module()) -> map().
+-spec kura_repo_info(module()) -> repo().
 kura_repo_info(RepoMod) ->
-    Config = kura_repo:config(RepoMod),
+    Config =
+        case optional(kura_repo, config, [RepoMod]) of
+            {ok, Answer} when is_map(Answer) -> Answer;
+            _ -> #{}
+        end,
     #{
         module => atom_to_binary(RepoMod),
         database => maps:get(database, Config, ~"unknown"),
@@ -307,52 +461,46 @@ kura_repo_info(RepoMod) ->
         pool => maps:get(pool, Config, RepoMod)
     }.
 
--spec kura_pool_stats(atom()) -> map().
+-spec kura_pool_stats(atom()) -> pool_stats().
 kura_pool_stats(PoolName) ->
-    try
-        PoolPid = whereis(PoolName),
-        case PoolPid of
-            undefined ->
-                #{status => ~"down", available => 0, checked_out => 0, queued => 0};
-            _ ->
-                pool_stats_from_pid(PoolPid, PoolName)
-        end
-    catch
-        _:_ ->
-            #{status => ~"unknown", available => 0, checked_out => 0, queued => 0}
+    case whereis(PoolName) of
+        PoolPid when is_pid(PoolPid) ->
+            pool_stats_from_pid(PoolPid, PoolName);
+        _ ->
+            #{status => ~"down", available => 0, checked_out => 0, queued => 0}
     end.
 
--spec kura_migration_status(module()) -> [map()].
+-spec kura_migration_status(module()) -> [migration()].
 kura_migration_status(RepoMod) ->
-    try
-        Status = kura_migrator:status(RepoMod),
-        [
-            #{
-                version => integer_to_binary(V),
-                module => atom_to_binary(M),
-                status => atom_to_binary(S)
-            }
-         || {V, M, S} <- Status
-        ]
-    catch
-        _:_ -> []
+    case optional(kura_migrator, status, [RepoMod]) of
+        {ok, Status} when is_list(Status) ->
+            [
+                #{
+                    version => integer_to_binary(Version),
+                    module => atom_to_binary(Module),
+                    status => atom_to_binary(State)
+                }
+             || {Version, Module, State} <- Status,
+                is_integer(Version),
+                is_atom(Module),
+                is_atom(State)
+            ];
+        _ ->
+            []
     end.
 
--spec kura_schemas(module()) -> [map()].
+-spec kura_schemas(module()) -> [schema()].
 kura_schemas(RepoMod) ->
     case application:get_application(RepoMod) of
         {ok, App} ->
             case application:get_key(App, modules) of
-                {ok, Modules} ->
-                    lists:filtermap(
-                        fun(M) ->
-                            case is_kura_schema(M) of
-                                true -> {true, schema_info(M)};
-                                false -> false
-                            end
-                        end,
-                        lists:sort(Modules)
-                    );
+                {ok, Modules} when is_list(Modules) ->
+                    [
+                        schema_info(Module)
+                     || Module <- lists:sort(Modules),
+                        is_atom(Module),
+                        has_behaviour(Module, kura_schema)
+                    ];
                 _ ->
                     []
             end;
@@ -362,48 +510,93 @@ kura_schemas(RepoMod) ->
 
 %% Internal
 
-memsup_or_vm_memory() ->
-    Mem = erlang:memory(),
-    Total = proplists:get_value(total, Mem),
-    {Total, Total, 0}.
+%% Calls an optional dependency. `error` when it is not in the node, does not
+%% export the function or fails.
+-spec optional(module(), atom(), [term()]) -> {ok, term()} | error.
+optional(Module, Function, Arguments) ->
+    case
+        code:ensure_loaded(Module) =:= {module, Module} andalso
+            erlang:function_exported(Module, Function, length(Arguments))
+    of
+        true ->
+            try
+                {ok, erlang:apply(Module, Function, Arguments)}
+            catch
+                _:_ -> error
+            end;
+        false ->
+            error
+    end.
 
-proc_to_map(Pid, Info) ->
-    Name =
-        case proplists:get_value(registered_name, Info) of
-            [] -> format_pid(Pid);
-            RegName -> atom_to_binary(RegName)
-        end,
+-spec process(pid(), [tuple()]) -> process().
+process(Pid, Info) ->
     #{
         pid => format_pid(Pid),
-        name => Name,
-        memory => proplists:get_value(memory, Info),
-        reductions => proplists:get_value(reductions, Info),
-        message_queue_len => proplists:get_value(message_queue_len, Info),
-        current_function => format_mfa(proplists:get_value(current_function, Info)),
-        initial_call => format_mfa(proplists:get_value(initial_call, Info)),
-        status => atom_to_binary(proplists:get_value(status, Info))
+        name => registered_name(Pid, Info),
+        memory => counter(memory, Info),
+        reductions => counter(reductions, Info),
+        message_queue_len => counter(message_queue_len, Info),
+        current_function => format_mfa(item(current_function, Info)),
+        initial_call => format_mfa(item(initial_call, Info)),
+        status => status(Info)
     }.
 
+-spec registered_name(pid(), [tuple()]) -> binary().
+registered_name(Pid, Info) ->
+    case item(registered_name, Info) of
+        Name when is_atom(Name), Name =/= undefined -> atom_to_binary(Name);
+        _ -> format_pid(Pid)
+    end.
+
+-spec counter(atom(), [tuple()]) -> non_neg_integer().
+counter(Item, Info) ->
+    case item(Item, Info) of
+        Count when is_integer(Count), Count >= 0 -> Count;
+        _ -> 0
+    end.
+
+-spec status([tuple()]) -> binary().
+status(Info) ->
+    case item(status, Info) of
+        Status when is_atom(Status) -> atom_to_binary(Status);
+        _ -> ~"unknown"
+    end.
+
+%% One item of a `process_info/2` or `count_children/1` answer. What it holds
+%% is narrowed by whoever asks.
+-spec item(atom(), [tuple()]) -> term().
+item(Item, Info) ->
+    case lists:keyfind(Item, 1, Info) of
+        {Item, Value} -> Value;
+        _ -> undefined
+    end.
+
+-spec format_pid(pid()) -> binary().
 format_pid(Pid) ->
     list_to_binary(pid_to_list(Pid)).
 
+-spec format_port(port()) -> binary().
 format_port(Port) ->
     list_to_binary(erlang:port_to_list(Port)).
 
-format_mfa({M, F, A}) ->
+-spec format_mfa(term()) -> binary().
+format_mfa({M, F, A}) when is_atom(M), is_atom(F), is_integer(A) ->
     iolist_to_binary(io_lib:format("~s:~s/~b", [M, F, A]));
 format_mfa(_) ->
     ~"unknown".
 
-format_ets_id(Tab) when is_atom(Tab) ->
-    atom_to_binary(Tab);
-format_ets_id(Tab) when is_reference(Tab) ->
-    list_to_binary(ref_to_list(Tab));
-format_ets_id(Tab) ->
-    iolist_to_binary(io_lib:format("~p", [Tab])).
+-spec format_ets_id(ets:table()) -> binary().
+format_ets_id(Table) when is_atom(Table) ->
+    atom_to_binary(Table);
+format_ets_id(Table) ->
+    printed(Table).
 
-%% An application's description and version are whatever its `.app` file
-%% says; `list_to_binary/1` fails on a character above 255.
+-spec printed(term()) -> binary().
+printed(Term) ->
+    unicode_binary(io_lib:format("~0tp", [Term], [{chars_limit, 200}])).
+
+%% Text from the node (an application description, a port name) as UTF-8. A
+%% list that is not text is printed instead of failing the page it is on.
 -spec unicode_binary(unicode:chardata()) -> binary().
 unicode_binary(Text) ->
     case unicode:characters_to_binary(Text) of
@@ -443,16 +636,22 @@ format_uptime(Ms) ->
         end
     ).
 
+-spec find_top_supervisor(atom()) -> pid() | undefined.
 find_top_supervisor(AppName) ->
     case try_named_sup(AppName) of
         Pid when is_pid(Pid) -> Pid;
         undefined -> find_sup_via_master(AppName)
     end.
 
+-spec try_named_sup(atom()) -> pid() | undefined.
 try_named_sup(AppName) ->
     SupStr = atom_to_list(AppName) ++ "_sup",
     try list_to_existing_atom(SupStr) of
-        SupName -> whereis(SupName)
+        SupName ->
+            case whereis(SupName) of
+                Pid when is_pid(Pid) -> Pid;
+                _ -> undefined
+            end
     catch
         error:badarg -> undefined
     end.
@@ -460,6 +659,7 @@ try_named_sup(AppName) ->
 %% The application master is asked for the supervisor it started. Looking
 %% for it among the linked processes means calling `which_children` on
 %% processes that are not supervisors and never answer.
+-spec find_sup_via_master(atom()) -> pid() | undefined.
 find_sup_via_master(AppName) ->
     case application_controller:get_master(AppName) of
         Master when is_pid(Master) ->
@@ -471,173 +671,192 @@ find_sup_via_master(AppName) ->
             undefined
     end.
 
-build_tree(Pid) ->
+%% `which_children/1` exits when the supervisor is gone.
+-spec children(pid()) ->
+    {ok, [{term(), pid() | restarting | undefined, supervisor | worker, term()}]} | error.
+children(Pid) ->
     try supervisor:which_children(Pid) of
-        Children ->
-            lists:map(
-                fun({Id, ChildPid, Type, _Mods}) ->
-                    Base = #{
-                        type => Type,
-                        name => format_child_id(Id),
-                        pid => format_child_pid(ChildPid),
-                        status => child_status(ChildPid)
-                    },
-                    ProcInfo = child_proc_info(ChildPid),
-                    WithInfo = maps:merge(Base, ProcInfo),
-                    case Type of
-                        supervisor when is_pid(ChildPid) ->
-                            WithInfo#{children => build_tree(ChildPid)};
-                        _ ->
-                            WithInfo#{children => []}
-                    end
-                end,
-                Children
-            )
+        Children -> {ok, Children}
     catch
-        _:_ -> []
+        _:_ -> error
     end.
 
+-spec build_tree(pid()) -> [child()].
+build_tree(Pid) ->
+    case children(Pid) of
+        {ok, Children} ->
+            [child(Id, ChildPid, Type) || {Id, ChildPid, Type, _Modules} <- Children];
+        error ->
+            []
+    end.
+
+-spec child(term(), pid() | restarting | undefined, supervisor | worker) -> child().
+child(Id, Pid, Type) when is_pid(Pid) ->
+    Info =
+        case erlang:process_info(Pid, [status, memory, message_queue_len, current_function]) of
+            undefined -> [];
+            Items -> Items
+        end,
+    #{
+        type => Type,
+        name => format_child_id(Id),
+        pid => format_pid(Pid),
+        status =>
+            case Info of
+                [] -> ~"dead";
+                _ -> status(Info)
+            end,
+        memory => counter(memory, Info),
+        message_queue_len => counter(message_queue_len, Info),
+        current_function => format_mfa(item(current_function, Info)),
+        children =>
+            case Type of
+                supervisor -> build_tree(Pid);
+                worker -> []
+            end
+    };
+child(Id, NotRunning, Type) ->
+    #{
+        type => Type,
+        name => format_child_id(Id),
+        pid => atom_to_binary(NotRunning),
+        status =>
+            case NotRunning of
+                restarting -> ~"restarting";
+                undefined -> ~"stopped"
+            end,
+        memory => 0,
+        message_queue_len => 0,
+        current_function => ~"\x{2014}",
+        children => []
+    }.
+
+-spec format_child_id(term()) -> binary().
 format_child_id(Id) when is_atom(Id) -> atom_to_binary(Id);
 format_child_id(Id) -> nova_liveboard_redact:child_id(Id).
 
-format_child_pid(Pid) when is_pid(Pid) -> list_to_binary(pid_to_list(Pid));
-format_child_pid(undefined) -> ~"undefined";
-format_child_pid(restarting) -> ~"restarting";
-format_child_pid(_) -> ~"unknown".
-
-child_status(Pid) when is_pid(Pid) ->
-    case erlang:process_info(Pid, status) of
-        {status, S} -> atom_to_binary(S);
-        undefined -> ~"dead"
-    end;
-child_status(restarting) ->
-    ~"restarting";
-child_status(_) ->
-    ~"stopped".
-
-child_proc_info(Pid) when is_pid(Pid) ->
-    case erlang:process_info(Pid, [memory, message_queue_len, current_function]) of
-        undefined ->
-            #{memory => 0, message_queue_len => 0, current_function => ~"unknown"};
-        Info ->
-            #{
-                memory => proplists:get_value(memory, Info, 0),
-                message_queue_len => proplists:get_value(message_queue_len, Info, 0),
-                current_function => format_mfa(proplists:get_value(current_function, Info))
-            }
-    end;
-child_proc_info(_) ->
-    #{memory => 0, message_queue_len => 0, current_function => ~"—"}.
-
+-spec scheduler_wall_time() -> wall_time().
 scheduler_wall_time() ->
-    try erlang:statistics(scheduler_wall_time) of
+    case erlang:statistics(scheduler_wall_time) of
         undefined -> [];
-        List when is_list(List) -> lists:sort(List);
-        _ -> []
-    catch
-        _:_ -> []
+        Schedulers -> lists:sort(Schedulers)
     end.
 
+-spec calc_sched_util(wall_time(), wall_time()) -> [#{id := pos_integer(), util := float()}].
 calc_sched_util([], _) ->
     [];
 calc_sched_util(_, []) ->
     [];
 calc_sched_util(Prev, Curr) ->
-    Map = maps:from_list([{I, {A, T}} || {I, A, T} <- Prev]),
-    lists:filtermap(
-        fun({I, A1, T1}) ->
-            case maps:find(I, Map) of
-                {ok, {A0, T0}} ->
-                    DT = T1 - T0,
-                    Util =
-                        case DT of
-                            0 -> 0.0;
-                            _ -> (A1 - A0) / DT * 100
-                        end,
-                    {true, #{id => I, util => Util}};
-                error ->
-                    false
-            end
-        end,
-        Curr
-    ).
+    Before = #{Id => {Active, Total} || {Id, Active, Total} <- Prev},
+    [
+        #{id => Id, util => utilisation(Active - Active0, Total - Total0)}
+     || {Id, Active, Total} <- Curr,
+        {Active0, Total0} <- [maps:get(Id, Before, undefined)]
+    ].
 
-is_kura_repo(Mod) ->
-    try
-        Behaviours = proplists:get_value(behaviour, Mod:module_info(attributes), []),
-        lists:member(kura_repo, Behaviours)
+-spec utilisation(integer(), integer()) -> float().
+utilisation(_Active, 0) -> 0.0;
+utilisation(Active, Total) -> Active / Total * 100.
+
+-spec has_behaviour(module(), module()) -> boolean().
+has_behaviour(Module, Behaviour) ->
+    try Module:module_info(attributes) of
+        Attributes when is_list(Attributes) ->
+            lists:member(
+                Behaviour,
+                lists:append([
+                    Behaviours
+                 || {behaviour, Behaviours} <- Attributes, is_list(Behaviours)
+                ])
+            );
+        _ ->
+            false
     catch
         _:_ -> false
     end.
 
-is_kura_schema(Mod) ->
-    try
-        Behaviours = proplists:get_value(behaviour, Mod:module_info(attributes), []),
-        lists:member(kura_schema, Behaviours)
-    catch
-        _:_ -> false
-    end.
-
+-spec schema_info(module()) -> schema().
 schema_info(Mod) ->
-    Fields =
-        try Mod:fields() of
-            Fs -> [field_info(F) || F <- Fs]
-        catch
-            _:_ -> []
-        end,
-    Assocs =
-        try kura_schema:associations(Mod) of
-            As -> [assoc_info(A) || A <- As]
-        catch
-            _:_ -> []
-        end,
-    Indexes =
-        try kura_schema:indexes(Mod) of
-            Is -> [index_info(I) || I <- Is]
-        catch
-            _:_ -> []
-        end,
     #{
         module => atom_to_binary(Mod),
         table =>
-            try
-                Mod:table()
-            catch
-                _:_ -> ~"unknown"
+            case optional(Mod, table, []) of
+                {ok, Table} -> Table;
+                error -> ~"unknown"
             end,
-        fields => Fields,
-        associations => Assocs,
-        indexes => Indexes
+        fields => [
+            Field
+         || Declared <- listed(Mod, fields, []), {ok, Field} <- [field_info(Declared)]
+        ],
+        associations => [
+            Association
+         || Declared <- listed(kura_schema, associations, [Mod]),
+            {ok, Association} <- [assoc_info(Declared)]
+        ],
+        indexes => [
+            Index
+         || Declared <- listed(kura_schema, indexes, [Mod]), {ok, Index} <- [index_info(Declared)]
+        ]
     }.
 
-field_info({kura_field, Name, Type, _Col, _Default, PK, _Nullable, Virtual}) ->
-    #{
-        name => atom_to_binary(Name),
-        type => format_kura_type(Type),
-        primary_key => PK,
-        virtual => Virtual
-    }.
+-spec listed(module(), atom(), [term()]) -> [term()].
+listed(Module, Function, Arguments) ->
+    case optional(Module, Function, Arguments) of
+        {ok, List} when is_list(List) -> List;
+        _ -> []
+    end.
 
-%% Kura's record grows at the end between versions, so only the leading
+%% Kura's records grow at the end between versions, so only the leading
 %% fields are relied on.
-assoc_info(Assoc) when tuple_size(Assoc) >= 4, element(1, Assoc) =:= kura_assoc ->
-    #{
-        name => atom_to_binary(element(2, Assoc)),
-        type => atom_to_binary(element(3, Assoc)),
-        schema => atom_to_binary(element(4, Assoc))
-    }.
+-spec field_info(term()) ->
+    {ok, #{name := binary(), type := binary(), primary_key := term(), virtual := term()}} | error.
+field_info(Field) when
+    is_tuple(Field), tuple_size(Field) >= 8, element(1, Field) =:= kura_field
+->
+    case element(2, Field) of
+        Name when is_atom(Name) ->
+            {ok, #{
+                name => atom_to_binary(Name),
+                type => format_kura_type(element(3, Field)),
+                primary_key => element(6, Field),
+                virtual => element(8, Field)
+            }};
+        _ ->
+            error
+    end;
+field_info(_) ->
+    error.
 
-index_info({Columns, Opts}) when is_map(Opts) ->
-    #{
-        columns => [atom_to_binary(C) || C <- Columns],
-        unique => maps:get(unique, Opts, false)
-    };
-index_info({Columns, _}) ->
-    #{
-        columns => [atom_to_binary(C) || C <- Columns],
-        unique => false
-    }.
+-spec assoc_info(term()) -> {ok, #{name := binary(), type := binary(), schema := binary()}} | error.
+assoc_info(Assoc) when is_tuple(Assoc), tuple_size(Assoc) >= 4, element(1, Assoc) =:= kura_assoc ->
+    case {element(2, Assoc), element(3, Assoc), element(4, Assoc)} of
+        {Name, Type, Schema} when is_atom(Name), is_atom(Type), is_atom(Schema) ->
+            {ok, #{
+                name => atom_to_binary(Name),
+                type => atom_to_binary(Type),
+                schema => atom_to_binary(Schema)
+            }};
+        _ ->
+            error
+    end;
+assoc_info(_) ->
+    error.
 
+-spec index_info(term()) -> {ok, #{columns := [binary()], unique := term()}} | error.
+index_info({Columns, Opts}) when is_list(Columns) ->
+    {ok, #{
+        columns => [atom_to_binary(Column) || Column <- Columns, is_atom(Column)],
+        unique =>
+            case Opts of
+                #{unique := Unique} -> Unique;
+                _ -> false
+            end
+    }};
+index_info(_) ->
+    error.
+
+-spec format_kura_type(term()) -> binary().
 format_kura_type(id) ->
     ~"id";
 format_kura_type(integer) ->
@@ -658,72 +877,82 @@ format_kura_type(uuid) ->
     ~"uuid";
 format_kura_type(jsonb) ->
     ~"jsonb";
-format_kura_type({enum, Vals}) ->
-    iolist_to_binary([~"enum(", lists:join(~", ", [atom_to_binary(V) || V <- Vals]), ~")"]);
+format_kura_type({enum, Values}) when is_list(Values) ->
+    Names = [atom_to_binary(Value) || Value <- Values, is_atom(Value)],
+    iolist_to_binary([~"enum(", lists:join(~", ", Names), ~")"]);
 format_kura_type({array, Inner}) ->
     iolist_to_binary([~"array(", format_kura_type(Inner), ~")"]);
-format_kura_type({embed, Kind, Mod}) ->
+format_kura_type({embed, Kind, Mod}) when is_atom(Kind), is_atom(Mod) ->
     iolist_to_binary([atom_to_binary(Kind), ~"(", atom_to_binary(Mod), ~")"]);
 format_kura_type(Other) ->
-    iolist_to_binary(io_lib:format("~p", [Other])).
+    printed(Other).
 
+%% Reads the state of a pgo pool: `{State, Queue, Codel}`.
+-spec pool_stats_from_pid(pid(), atom()) -> pool_stats().
 pool_stats_from_pid(PoolPid, PoolName) ->
+    Unknown = #{status => ~"unknown", available => 0, checked_out => 0, queued => 0},
     try sys:get_state(PoolPid) of
-        {State, Tid, Codel} when is_atom(State), is_reference(Tid), is_map(Codel) ->
-            QueueSize = ets:info(Tid, size),
-            PoolSize = pool_size_from_sup(PoolName),
-            case State of
-                ready ->
+        {State, Queue, Codel} when is_map(Codel) ->
+            case {State, table_size(Queue)} of
+                {ready, QueueSize} when is_integer(QueueSize), QueueSize >= 0 ->
                     #{
                         status => ~"ready",
                         available => QueueSize,
-                        checked_out => max(0, PoolSize - QueueSize),
+                        checked_out => max(0, pool_size_from_sup(PoolName) - QueueSize),
                         queued => 0,
                         delay => maps:get(delay, Codel, 0)
                     };
-                busy ->
+                {busy, QueueSize} when is_integer(QueueSize), QueueSize >= 0 ->
                     #{
                         status => ~"busy",
                         available => 0,
-                        checked_out => PoolSize,
+                        checked_out => pool_size_from_sup(PoolName),
                         queued => QueueSize,
                         delay => maps:get(delay, Codel, 0)
-                    }
+                    };
+                _ ->
+                    Unknown
             end;
         _ ->
-            #{status => ~"unknown", available => 0, checked_out => 0, queued => 0}
+            Unknown
     catch
-        _:_ ->
-            #{status => ~"unknown", available => 0, checked_out => 0, queued => 0}
+        _:_ -> Unknown
     end.
 
+%% The number of objects in the ETS table `Table`, when it is one.
+-spec table_size(term()) -> non_neg_integer() | undefined.
+table_size(Table) ->
+    case [Known || Known <- ets:all(), Known =:= Table] of
+        [Known] ->
+            case ets:info(Known, size) of
+                Size when is_integer(Size), Size >= 0 -> Size;
+                _ -> undefined
+            end;
+        _ ->
+            undefined
+    end.
+
+-spec pool_size_from_sup(atom()) -> non_neg_integer().
 pool_size_from_sup(PoolName) ->
-    try
-        SupName = list_to_existing_atom(atom_to_list(PoolName) ++ "_sup"),
-        case whereis(SupName) of
-            undefined ->
-                0;
-            SupPid ->
-                ConnSup = find_connection_sup(SupPid),
-                case ConnSup of
-                    undefined ->
-                        0;
-                    Pid ->
-                        Counts = supervisor:count_children(Pid),
-                        proplists:get_value(active, Counts, 0)
-                end
-        end
+    case try_named_sup(PoolName) of
+        undefined ->
+            0;
+        SupPid ->
+            case children(SupPid) of
+                {ok, Children} ->
+                    case [Pid || {pgo_connection_sup, Pid, _, _} <- Children, is_pid(Pid)] of
+                        [ConnSup | _] -> active_children(ConnSup);
+                        [] -> 0
+                    end;
+                error ->
+                    0
+            end
+    end.
+
+-spec active_children(pid()) -> non_neg_integer().
+active_children(Supervisor) ->
+    try supervisor:count_children(Supervisor) of
+        Counts -> counter(active, Counts)
     catch
         _:_ -> 0
-    end.
-
-find_connection_sup(SupPid) ->
-    try supervisor:which_children(SupPid) of
-        Children ->
-            case [Pid || {pgo_connection_sup, Pid, _, _} <- Children, is_pid(Pid)] of
-                [Pid | _] -> Pid;
-                [] -> undefined
-            end
-    catch
-        _:_ -> undefined
     end.

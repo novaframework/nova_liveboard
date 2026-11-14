@@ -84,10 +84,12 @@ request_show(Req) ->
 %% ---------------------------------------------------------------------------
 
 -doc "Map a page to its freshly-gathered data, rendered to the live region inner.".
--spec page_inner(atom(), term()) -> iodata().
+-spec page_inner(atom(), atom()) -> iodata().
 page_inner(overview, _) ->
     nova_liveboard_html:overview_html(nova_liveboard_data:system_info());
-page_inner(processes, Sort) ->
+page_inner(processes, Sort) when
+    Sort =:= memory; Sort =:= reductions; Sort =:= message_queue_len
+->
     nova_liveboard_html:processes_html(nova_liveboard_data:top_processes(Sort, ?TOP_N), Sort);
 page_inner(ets, _) ->
     nova_liveboard_html:ets_html(nova_liveboard_data:ets_tables());

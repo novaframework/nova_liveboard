@@ -41,7 +41,7 @@ exits.
     clients := #{pid() => client()},
     timer := reference() | undefined,
     flush := reference() | undefined,
-    metrics := map() | undefined,
+    metrics := nova_liveboard_data:metrics() | undefined,
     failing := boolean()
 }.
 
@@ -198,7 +198,8 @@ audiences(Subscribers) ->
 
 %% The metrics view accumulates samples between ticks. They are kept only
 %% while someone is watching.
--spec metrics(boolean(), map() | undefined) -> map() | undefined.
+-spec metrics(boolean(), nova_liveboard_data:metrics() | undefined) ->
+    nova_liveboard_data:metrics() | undefined.
 metrics(true, Previous) ->
     try
         nova_liveboard_data:collect_metrics(Previous)
@@ -209,7 +210,7 @@ metrics(false, _Previous) ->
     undefined.
 
 %% Renders `View` once and sends the frame to every stream showing it.
--spec broadcast(view(), map() | undefined, [pid()]) -> boolean().
+-spec broadcast(view(), nova_liveboard_data:metrics() | undefined, [pid()]) -> boolean().
 broadcast(_View, _Metrics, []) ->
     true;
 broadcast(View, Metrics, Pids) ->
@@ -235,7 +236,7 @@ flush_soon(?REQUESTS, State = #{flush := undefined}) ->
 flush_soon(_View, State) ->
     State.
 
--spec frame(view(), map() | undefined) -> {ok, binary()} | error.
+-spec frame(view(), nova_liveboard_data:metrics() | undefined) -> {ok, binary()} | error.
 frame(View, Metrics) ->
     try
         {Selector, Inner} = inner(View, Metrics),
@@ -247,7 +248,7 @@ frame(View, Metrics) ->
         _:_ -> error
     end.
 
--spec inner(view(), map() | undefined) -> {binary(), iodata()}.
+-spec inner(view(), nova_liveboard_data:metrics() | undefined) -> {binary(), iodata()}.
 inner({vitals, _Option}, _Metrics) ->
     {?VITALS, nova_liveboard_html:vitals_html(nova_liveboard_data:system_info())};
 inner(?METRICS, Metrics) when is_map(Metrics) ->

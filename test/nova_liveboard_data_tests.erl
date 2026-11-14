@@ -171,3 +171,50 @@ kura_schema_test_() ->
                 nova_liveboard_data:kura_schemas(nova_liveboard_test_unnamed_app)
             )
         end}.
+
+%% A pgo pool keeps `{State, Queue, Codel}`, `Queue` being an ETS table.
+pool_stats_test_() ->
+    {setup,
+        fun() ->
+            Queue = ets:new(queue, [public]),
+            true = ets:insert(Queue, [{first}, {second}]),
+            Queue
+        end,
+        fun ets:delete/1, fun(Queue) ->
+            [
+                ?_assertEqual(
+                    #{
+                        status => ~"ready",
+                        available => 2,
+                        checked_out => 0,
+                        queued => 0,
+                        delay => 3
+                    },
+                    pool_stats({ready, Queue, #{delay => 3}})
+                ),
+                ?_assertEqual(
+                    #{status => ~"busy", available => 0, checked_out => 0, queued => 2, delay => 0},
+                    pool_stats({busy, Queue, #{}})
+                ),
+                ?_assertEqual(
+                    #{status => ~"unknown", available => 0, checked_out => 0, queued => 0},
+                    pool_stats({ready, make_ref(), #{}})
+                ),
+                ?_assertEqual(
+                    #{status => ~"unknown", available => 0, checked_out => 0, queued => 0},
+                    pool_stats(something_else)
+                ),
+                ?_assertEqual(
+                    #{status => ~"down", available => 0, checked_out => 0, queued => 0},
+                    nova_liveboard_data:kura_pool_stats(nova_liveboard_test_pool)
+                )
+            ]
+        end}.
+
+pool_stats(State) ->
+    {ok, Pool} = nova_liveboard_test_pool:start(nova_liveboard_test_pool, State),
+    try
+        nova_liveboard_data:kura_pool_stats(nova_liveboard_test_pool)
+    after
+        ok = gen_server:stop(Pool)
+    end.
