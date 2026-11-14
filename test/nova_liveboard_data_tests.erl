@@ -121,3 +121,53 @@ unnamed_top_supervisor_test_() ->
                 )
             end
         ]}.
+
+kura_schema_test_() ->
+    {setup, fun() -> ok = nova_liveboard_test_unnamed_app:load() end,
+        fun(_) -> ok = application:unload(nova_liveboard_test_unnamed) end, fun() ->
+            ?assertEqual(
+                [
+                    #{
+                        module => ~"nova_liveboard_test_schema",
+                        table => ~"things",
+                        fields => [
+                            #{
+                                name => ~"id",
+                                type => ~"id",
+                                primary_key => true,
+                                virtual => false
+                            },
+                            #{
+                                name => ~"name",
+                                type => ~"string",
+                                primary_key => false,
+                                virtual => false
+                            },
+                            #{
+                                name => ~"tags",
+                                type => ~"array(string)",
+                                primary_key => false,
+                                virtual => true
+                            }
+                        ],
+                        associations => [
+                            #{
+                                name => ~"owner",
+                                type => ~"belongs_to",
+                                schema => ~"nova_liveboard_test_schema"
+                            },
+                            #{
+                                name => ~"parts",
+                                type => ~"has_many",
+                                schema => ~"nova_liveboard_test_schema"
+                            }
+                        ],
+                        indexes => [
+                            #{columns => [~"name"], unique => true},
+                            #{columns => [~"owner_id", ~"name"], unique => false}
+                        ]
+                    }
+                ],
+                nova_liveboard_data:kura_schemas(nova_liveboard_test_unnamed_app)
+            )
+        end}.

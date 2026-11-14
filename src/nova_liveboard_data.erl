@@ -618,11 +618,13 @@ field_info({kura_field, Name, Type, _Col, _Default, PK, _Nullable, Virtual}) ->
         virtual => Virtual
     }.
 
-assoc_info({kura_assoc, Name, Type, Schema, _FK, _JoinThrough, _JoinKeys}) ->
+%% Kura's record grows at the end between versions, so only the leading
+%% fields are relied on.
+assoc_info(Assoc) when tuple_size(Assoc) >= 4, element(1, Assoc) =:= kura_assoc ->
     #{
-        name => atom_to_binary(Name),
-        type => atom_to_binary(Type),
-        schema => atom_to_binary(Schema)
+        name => atom_to_binary(element(2, Assoc)),
+        type => atom_to_binary(element(3, Assoc)),
+        schema => atom_to_binary(element(4, Assoc))
     }.
 
 index_info({Columns, Opts}) when is_map(Opts) ->

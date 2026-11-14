@@ -1,7 +1,7 @@
 -module(nova_liveboard_test_unnamed_app).
 -moduledoc """
 An application whose top supervisor is not registered as `<app>_sup`, with a
-description that is not Latin-1.
+description that is not Latin-1 and a Kura schema among its modules.
 """.
 -behaviour(application).
 
@@ -15,7 +15,7 @@ load() ->
         {application, ?APP, [
             {description, "Unnamed \x{2192} top supervisor"},
             {vsn, "1.0.0"},
-            {modules, [?MODULE]},
+            {modules, [?MODULE, nova_liveboard_test_schema]},
             {registered, []},
             {applications, [kernel, stdlib]},
             {mod, {?MODULE, []}}
