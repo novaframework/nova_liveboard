@@ -31,6 +31,17 @@ sparkline_points_test_() ->
         ?_assert(is_binary(nova_liveboard_data:sparkline_points([1, 5, 3, 9, 2], 200, 40)))
     ].
 
+scheduler_info_test() ->
+    _ = nova_liveboard_data:collect_metrics(undefined),
+    Schedulers = nova_liveboard_data:scheduler_info(),
+    ?assert(length(Schedulers) >= erlang:system_info(schedulers)),
+    ?assertEqual(
+        lists:seq(1, length(Schedulers)), [
+            Id
+         || #{id := Id, active := Active} <- Schedulers, Active >= 0
+        ]
+    ).
+
 system_info_shape_test() ->
     Sys = nova_liveboard_data:system_info(),
     ?assert(is_integer(maps:get(process_count, Sys))),

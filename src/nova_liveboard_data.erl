@@ -180,14 +180,12 @@ port_info() ->
 
 -spec scheduler_info() -> [map()].
 scheduler_info() ->
-    Count = erlang:system_info(schedulers),
-    lists:map(
-        fun(I) ->
-            {_, Active} = erlang:statistics({scheduler_wall_time_all, I}),
-            #{id => I, active => Active}
-        end,
-        lists:seq(1, Count)
-    ).
+    case erlang:statistics(scheduler_wall_time_all) of
+        undefined ->
+            [];
+        Schedulers ->
+            [#{id => Id, active => Active} || {Id, Active, _Total} <- lists:sort(Schedulers)]
+    end.
 
 -spec supervision_tree(atom()) -> {ok, list()} | {error, term()}.
 supervision_tree(AppName) ->
