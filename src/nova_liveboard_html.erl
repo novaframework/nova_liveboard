@@ -710,37 +710,59 @@ setup_hint() ->
 %% kura: database + schemas
 %% ---------------------------------------------------------------------------
 
--doc "Kura repo pool panels.".
+-doc """
+Kura repo panels: where the repo connects, its backend and pool, and the
+figures of the pool or the reason there are none.
+""".
 -spec database_html([map()]) -> iodata().
 database_html([]) ->
     empty(~"no kura repos detected");
 database_html(Repos) ->
     [
         ~"<div class=\"grid two\">",
-        [
-            panel(maps:get(module, Repo), [
-                kv(~"database", maps:get(database, Repo)),
-                kv(~"host", [to_bin(maps:get(hostname, Repo)), ~":", to_bin(maps:get(port, Repo))]),
-                kv(~"pool size", integer_to_binary(maps:get(pool_size, Repo))),
-                pool_stat(maps:get(pool, Repo))
-            ])
-         || Repo <- Repos
-        ],
+        [panel(maps:get(module, Repo, ~"unknown"), repo_rows(Repo)) || Repo <- Repos],
         ~"</div>"
     ].
 
-pool_stat(Stats) ->
-    Status = maps:get(status, Stats, ~"unknown"),
+repo_rows(Repo) ->
+    Pool = maps:get(pool, Repo, #{}),
     [
-        ~"<div class=\"kv\"><span class=\"k\">pool</span><span class=\"v\"><span class=\"status ",
+        [
+            kv(Label, maps:get(Key, Repo))
+         || {Key, Label} <- [{database, ~"database"}, {host, ~"host"}, {port, ~"port"}],
+            is_map_key(Key, Repo)
+        ],
+        [kv(~"backend", Backend) || #{backend := Backend} <- [Pool]],
+        pool_stat(Pool),
+        pool_figures(Repo, Pool)
+    ].
+
+pool_stat(Pool) ->
+    Status = maps:get(status, Pool, ~"unknown"),
+    [
+        ~"<div class=\"kv\"><span class=\"k\">pool</span><span class=\"v\">",
+        html_escape(maps:get(name, Pool, ~"unknown")),
+        ~" <span class=\"status ",
         pool_class(Status),
         ~"\">",
         html_escape(Status),
-        ~"</span> avail ",
-        integer_to_binary(maps:get(available, Stats, 0)),
-        ~" \x{00B7} busy ",
-        integer_to_binary(maps:get(checked_out, Stats, 0)),
-        ~"</span></div>"
+        ~"</span></span></div>"
+    ].
+
+pool_figures(_Repo, #{figures := Figures}) ->
+    [
+        [
+            kv(Label, maps:get(Key, Figures, ~"unknown"))
+         || {Key, Label} <- [
+                {size, ~"pool size"}, {in_use, ~"in use"}, {idle, ~"idle"}, {waiting, ~"waiting"}
+            ]
+        ],
+        [kv(html_escape(Label), Count) || {Label, Count} <- maps:get(counters, Figures, [])]
+    ];
+pool_figures(Repo, Pool) ->
+    [
+        kv(~"pool figures", maps:get(reason, Pool, ~"not available")),
+        [kv(~"configured size", Size) || #{configured_size := Size} <- [Repo]]
     ].
 
 -doc "Kura schema definitions (fields, associations, indexes).".
@@ -865,9 +887,9 @@ method_class(~"PUT") -> ~"put";
 method_class(~"DELETE") -> ~"delete";
 method_class(_) -> ~"other".
 
-pool_class(~"ready") -> ~"s2";
-pool_class(~"busy") -> ~"s4";
-pool_class(~"down") -> ~"s5";
+pool_class(~"running") -> ~"s2";
+pool_class(~"no answer") -> ~"s4";
+pool_class(~"not started") -> ~"s5";
 pool_class(_) -> ~"idle".
 
 status_bin(undefined) -> ~"-";

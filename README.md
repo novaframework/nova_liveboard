@@ -15,7 +15,7 @@ updates over SSE, no JavaScript build step, no off-origin requests.
 | Requests | every HTTP request the node handles, streaming in live, with an opt-in deep trace of the **processes each request spawns** |
 | Supervisors | the live supervision tree per application |
 | Applications / ETS / Ports | running apps, ETS tables, open ports |
-| Database / Schemas | Kura repos, pools and schemas (when Kura is present) |
+| Database / Schemas | Kura repos with their pool figures, and schemas (when Kura is present), see [Database page](#database-page) |
 
 The vitals deck across the top stays live on every page.
 
@@ -65,6 +65,27 @@ always on and cheap. "Arm next 10" turns on scoped process tracing for the next
 few requests, so you can open a request and see the exact tree of processes it
 spawned - overhead is only paid while armed.
 
+## Database page
+
+Kura and its backends are not dependencies: the page appears when Kura is in
+the node, and calls only exported functions of the libraries it finds there.
+Per repo it shows the database, host and port as configured, the backend, the
+pool's name and status, and the pool's figures:
+
+| Backend | Pool figures | Read from |
+|---------|--------------|-----------|
+| `kura_postgres` | size, in use, idle and waiting now; checkouts, waits, timeouts, disconnects and retired since the pool started | `minato:stats/1` |
+| `kura_sqlite` | none, `kura_pool_sqlite` reports none; the configured `pool_size` is shown | |
+| any other pool module | none | |
+
+The pool of a repo and the module behind it come from `kura_db:get_pool/1`
+and `kura_db:get_pool_module/1`. Where there are no figures the page says
+why: the library or the function is not on the node, no pool is running under
+that name, or the pool did not answer. All pools are given one second between
+them, so a pool that is stuck does not hold up the page.
+
+pgo pools are not read any more: Kura has no pgo backend.
+
 ## Configuration
 
 | Key | Default | Accepted | Meaning |
@@ -111,8 +132,8 @@ What a viewer can see:
 - with the tracing plugin, the method, path, status, duration, reductions,
   memory and handler of every request the node handles outside the liveboard
   itself, and for deep-traced requests the processes they spawned;
-- with Kura, each repo's database name, host, port and pool figures, and each
-  schema's table, fields and types.
+- with Kura, each repo's database name, host, port, backend, pool name and
+  pool figures, and each schema's table, fields and types.
 
 What it never reads or shows: process state, process dictionaries and
 messages, the contents of ETS tables, application environments, request

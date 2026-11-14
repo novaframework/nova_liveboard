@@ -16,8 +16,7 @@
     %% Kura
     kura_available/0,
     kura_repos/0,
-    kura_repo_info/1,
-    kura_pool_stats/1,
+    kura_repo_infos/1,
     kura_migration_status/1,
     kura_schemas/1
 ]).
@@ -108,18 +107,11 @@
 }.
 -type repo() :: #{
     module := binary(),
-    database := term(),
-    hostname := term(),
-    port := term(),
-    pool_size := term(),
-    pool := term()
-}.
--type pool_stats() :: #{
-    status := binary(),
-    available := non_neg_integer(),
-    checked_out := non_neg_integer(),
-    queued := non_neg_integer(),
-    delay => term()
+    pool := nova_liveboard_pool:pool(),
+    database => binary(),
+    host => binary(),
+    port => inet:port_number(),
+    configured_size => pos_integer()
 }.
 -type migration() :: #{version := binary(), module := binary(), status := binary()}.
 -type schema() :: #{
@@ -142,7 +134,6 @@
     child/0,
     metrics/0,
     repo/0,
-    pool_stats/0,
     migration/0,
     schema/0
 ]).
@@ -445,30 +436,19 @@ kura_repos() ->
             ]
     end.
 
--spec kura_repo_info(module()) -> repo().
-kura_repo_info(RepoMod) ->
-    Config =
-        case optional(kura_repo, config, [RepoMod]) of
-            {ok, Answer} when is_map(Answer) -> Answer;
-            _ -> #{}
-        end,
-    #{
-        module => atom_to_binary(RepoMod),
-        database => maps:get(database, Config, ~"unknown"),
-        hostname => maps:get(hostname, Config, ~"localhost"),
-        port => maps:get(port, Config, 5432),
-        pool_size => maps:get(pool_size, Config, 10),
-        pool => maps:get(pool, Config, RepoMod)
-    }.
-
--spec kura_pool_stats(atom()) -> pool_stats().
-kura_pool_stats(PoolName) ->
-    case whereis(PoolName) of
-        PoolPid when is_pid(PoolPid) ->
-            pool_stats_from_pid(PoolPid, PoolName);
-        _ ->
-            #{status => ~"down", available => 0, checked_out => 0, queued => 0}
-    end.
+%% Every pool is asked before any answer is waited for, so the pools that do
+%% not answer share one deadline.
+-spec kura_repo_infos([module()]) -> [repo()].
+kura_repo_infos(Repos) ->
+    Asked = [{Repo, nova_liveboard_pool:ask(Repo)} || Repo <- Repos],
+    Deadline = nova_liveboard_pool:deadline(),
+    [
+        with_settings(shown_settings(Repo), #{
+            module => atom_to_binary(Repo),
+            pool => nova_liveboard_pool:answer(Pool, Deadline)
+        })
+     || {Repo, Pool} <- Asked
+    ].
 
 -spec kura_migration_status(module()) -> [migration()].
 kura_migration_status(RepoMod) ->
@@ -514,19 +494,73 @@ kura_schemas(RepoMod) ->
 %% export the function or fails.
 -spec optional(module(), atom(), [term()]) -> {ok, term()} | error.
 optional(Module, Function, Arguments) ->
-    case
-        code:ensure_loaded(Module) =:= {module, Module} andalso
-            erlang:function_exported(Module, Function, length(Arguments))
-    of
-        true ->
-            try
-                {ok, erlang:apply(Module, Function, Arguments)}
-            catch
-                _:_ -> error
-            end;
-        false ->
-            error
+    case nova_liveboard_optional:call(Module, Function, Arguments) of
+        {ok, Answer} -> {ok, Answer};
+        _ -> error
     end.
+
+%% `kura_repo:config/1` answers the whole configuration of the repo, the
+%% password included. Only the settings that are shown are taken from it, and
+%% a failure is dropped with its reason, which can repeat the configuration.
+-spec shown_settings(module()) -> map().
+shown_settings(Repo) ->
+    case nova_liveboard_optional:call(kura_repo, config, [Repo]) of
+        {ok, Config} when is_map(Config) ->
+            maps:with([database, host, hostname, port, pool_size], Config);
+        _ ->
+            #{}
+    end.
+
+-spec with_settings(map(), repo()) -> repo().
+with_settings(Settings, Repo) ->
+    with_configured_size(
+        Settings, with_port(Settings, with_host(Settings, with_database(Settings, Repo)))
+    ).
+
+-spec with_database(map(), repo()) -> repo().
+with_database(#{database := Database}, Repo) ->
+    case setting_text(Database) of
+        {ok, Text} -> Repo#{database => Text};
+        error -> Repo
+    end;
+with_database(_Settings, Repo) ->
+    Repo.
+
+%% Kura's Postgres pool takes the host under either key.
+-spec with_host(map(), repo()) -> repo().
+with_host(Settings, Repo) ->
+    case setting_text(maps:get(host, Settings, maps:get(hostname, Settings, undefined))) of
+        {ok, Text} -> Repo#{host => Text};
+        error -> Repo
+    end.
+
+-spec with_port(map(), repo()) -> repo().
+with_port(#{port := Port}, Repo) when is_integer(Port), Port >= 0, Port =< 65535 ->
+    Repo#{port => Port};
+with_port(_Settings, Repo) ->
+    Repo.
+
+-spec with_configured_size(map(), repo()) -> repo().
+with_configured_size(#{pool_size := Size}, Repo) when is_integer(Size), Size > 0 ->
+    Repo#{configured_size => Size};
+with_configured_size(_Settings, Repo) ->
+    Repo.
+
+%% A setting written as a binary, a string or an atom, as Kura accepts them.
+-spec setting_text(term()) -> {ok, binary()} | error.
+setting_text(Value) when is_binary(Value) ->
+    {ok, Value};
+setting_text(undefined) ->
+    error;
+setting_text(Value) when is_atom(Value) ->
+    {ok, atom_to_binary(Value)};
+setting_text(Value) when is_list(Value) ->
+    case [Char || Char <- Value, is_integer(Char), Char >= 0] of
+        Chars when length(Chars) =:= length(Value) -> {ok, unicode_binary(Chars)};
+        _ -> error
+    end;
+setting_text(_) ->
+    error.
 
 -spec process(pid(), [tuple()]) -> process().
 process(Pid, Info) ->
@@ -886,73 +920,3 @@ format_kura_type({embed, Kind, Mod}) when is_atom(Kind), is_atom(Mod) ->
     iolist_to_binary([atom_to_binary(Kind), ~"(", atom_to_binary(Mod), ~")"]);
 format_kura_type(Other) ->
     printed(Other).
-
-%% Reads the state of a pgo pool: `{State, Queue, Codel}`.
--spec pool_stats_from_pid(pid(), atom()) -> pool_stats().
-pool_stats_from_pid(PoolPid, PoolName) ->
-    Unknown = #{status => ~"unknown", available => 0, checked_out => 0, queued => 0},
-    try sys:get_state(PoolPid) of
-        {State, Queue, Codel} when is_map(Codel) ->
-            case {State, table_size(Queue)} of
-                {ready, QueueSize} when is_integer(QueueSize), QueueSize >= 0 ->
-                    #{
-                        status => ~"ready",
-                        available => QueueSize,
-                        checked_out => max(0, pool_size_from_sup(PoolName) - QueueSize),
-                        queued => 0,
-                        delay => maps:get(delay, Codel, 0)
-                    };
-                {busy, QueueSize} when is_integer(QueueSize), QueueSize >= 0 ->
-                    #{
-                        status => ~"busy",
-                        available => 0,
-                        checked_out => pool_size_from_sup(PoolName),
-                        queued => QueueSize,
-                        delay => maps:get(delay, Codel, 0)
-                    };
-                _ ->
-                    Unknown
-            end;
-        _ ->
-            Unknown
-    catch
-        _:_ -> Unknown
-    end.
-
-%% The number of objects in the ETS table `Table`, when it is one.
--spec table_size(term()) -> non_neg_integer() | undefined.
-table_size(Table) ->
-    case [Known || Known <- ets:all(), Known =:= Table] of
-        [Known] ->
-            case ets:info(Known, size) of
-                Size when is_integer(Size), Size >= 0 -> Size;
-                _ -> undefined
-            end;
-        _ ->
-            undefined
-    end.
-
--spec pool_size_from_sup(atom()) -> non_neg_integer().
-pool_size_from_sup(PoolName) ->
-    case try_named_sup(PoolName) of
-        undefined ->
-            0;
-        SupPid ->
-            case children(SupPid) of
-                {ok, Children} ->
-                    case [Pid || {pgo_connection_sup, Pid, _, _} <- Children, is_pid(Pid)] of
-                        [ConnSup | _] -> active_children(ConnSup);
-                        [] -> 0
-                    end;
-                error ->
-                    0
-            end
-    end.
-
--spec active_children(pid()) -> non_neg_integer().
-active_children(Supervisor) ->
-    try supervisor:count_children(Supervisor) of
-        Counts -> counter(active, Counts)
-    catch
-        _:_ -> 0
-    end.

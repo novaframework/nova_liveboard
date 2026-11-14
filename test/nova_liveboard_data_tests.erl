@@ -1,6 +1,8 @@
 -module(nova_liveboard_data_tests).
 -include_lib("eunit/include/eunit.hrl").
 
+-define(KURA, nova_liveboard_test_kura).
+
 format_bytes_test_() ->
     [
         ?_assertEqual(~"512 B", nova_liveboard_data:format_bytes(512)),
@@ -172,49 +174,156 @@ kura_schema_test_() ->
             )
         end}.
 
-%% A pgo pool keeps `{State, Queue, Codel}`, `Queue` being an ETS table.
-pool_stats_test_() ->
-    {setup,
+kura_repo_infos_test_() ->
+    {foreach,
         fun() ->
-            Queue = ets:new(queue, [public]),
-            true = ets:insert(Queue, [{first}, {second}]),
-            Queue
+            ok = ?KURA:start(#{
+                shop_repo => ?KURA:postgres(shop_pool),
+                files_repo => ?KURA:sqlite()
+            }),
+            ok = ?KURA:minato(),
+            ?KURA:pool(shop_pool, ?KURA:stats())
         end,
-        fun ets:delete/1, fun(Queue) ->
-            [
-                ?_assertEqual(
-                    #{
-                        status => ~"ready",
-                        available => 2,
-                        checked_out => 0,
-                        queued => 0,
-                        delay => 3
-                    },
-                    pool_stats({ready, Queue, #{delay => 3}})
-                ),
-                ?_assertEqual(
-                    #{status => ~"busy", available => 0, checked_out => 0, queued => 2, delay => 0},
-                    pool_stats({busy, Queue, #{}})
-                ),
-                ?_assertEqual(
-                    #{status => ~"unknown", available => 0, checked_out => 0, queued => 0},
-                    pool_stats({ready, make_ref(), #{}})
-                ),
-                ?_assertEqual(
-                    #{status => ~"unknown", available => 0, checked_out => 0, queued => 0},
-                    pool_stats(something_else)
-                ),
-                ?_assertEqual(
-                    #{status => ~"down", available => 0, checked_out => 0, queued => 0},
-                    nova_liveboard_data:kura_pool_stats(nova_liveboard_test_pool)
-                )
-            ]
-        end}.
+        fun(Pool) ->
+            ok = gen_server:stop(Pool),
+            ?KURA:stop()
+        end,
+        [
+            fun postgres_repo_with_its_pool_figures/0,
+            fun sqlite_repo_without_figures/0,
+            fun repo_that_is_not_configured/0,
+            fun host_under_either_key/0,
+            fun settings_written_as_binaries_and_atoms/0,
+            fun settings_that_are_not_text_are_left_out/0,
+            fun only_the_shown_settings_are_read/0,
+            fun repo_whose_init_fails/0,
+            fun repos_keep_their_order/0
+        ]}.
 
-pool_stats(State) ->
-    {ok, Pool} = nova_liveboard_test_pool:start(nova_liveboard_test_pool, State),
-    try
-        nova_liveboard_data:kura_pool_stats(nova_liveboard_test_pool)
-    after
-        ok = gen_server:stop(Pool)
-    end.
+postgres_repo_with_its_pool_figures() ->
+    ?assertEqual(
+        [
+            #{
+                module => ~"shop_repo",
+                database => ~"shop",
+                host => ~"db.internal",
+                port => 5432,
+                configured_size => 10,
+                pool => #{
+                    status => ~"running",
+                    backend => ~"postgres (minato)",
+                    name => ~"shop_pool",
+                    figures => #{
+                        size => 10,
+                        in_use => 2,
+                        idle => 3,
+                        waiting => 1,
+                        counters => [
+                            {~"checkouts", 120},
+                            {~"waits", 7},
+                            {~"timeouts", 1},
+                            {~"disconnects", 4},
+                            {~"retired", 2}
+                        ]
+                    }
+                }
+            }
+        ],
+        nova_liveboard_data:kura_repo_infos([shop_repo])
+    ).
+
+%% No host and no port: a file has neither, and none is made up.
+sqlite_repo_without_figures() ->
+    ?assertEqual(
+        [
+            #{
+                module => ~"files_repo",
+                database => ~"priv/files.db",
+                configured_size => 4,
+                pool => #{
+                    status => ~"not available",
+                    backend => ~"sqlite",
+                    name => ~"files_repo",
+                    reason => ~"kura_pool_sqlite exports no function that reports pool figures"
+                }
+            }
+        ],
+        nova_liveboard_data:kura_repo_infos([files_repo])
+    ).
+
+repo_that_is_not_configured() ->
+    ?assertEqual(
+        [
+            #{
+                module => ~"nova_liveboard_test_repo",
+                pool => #{
+                    status => ~"not available",
+                    reason => ~"the repo has no pool module configured"
+                }
+            }
+        ],
+        nova_liveboard_data:kura_repo_infos([nova_liveboard_test_repo])
+    ).
+
+host_under_either_key() ->
+    Config = maps:remove(host, ?KURA:postgres(shop_pool)),
+    ok = application:set_env(kura, repos, #{shop_repo => Config#{hostname => "replica.internal"}}),
+    ?assertMatch(
+        [#{host := ~"replica.internal"}], nova_liveboard_data:kura_repo_infos([shop_repo])
+    ).
+
+settings_written_as_binaries_and_atoms() ->
+    Config = ?KURA:postgres(shop_pool),
+    ok = application:set_env(kura, repos, #{
+        shop_repo => Config#{database => ~"sh\x{f6}p", host => localhost}
+    }),
+    ?assertMatch(
+        [#{database := ~"sh\x{f6}p", host := ~"localhost"}],
+        nova_liveboard_data:kura_repo_infos([shop_repo])
+    ).
+
+settings_that_are_not_text_are_left_out() ->
+    Config = ?KURA:postgres(shop_pool),
+    ok = application:set_env(kura, repos, #{
+        shop_repo => Config#{
+            database => {secret, "hunter2"},
+            host => [{password, "hunter2"}],
+            port => "5432",
+            pool_size => many
+        }
+    }),
+    [Repo] = nova_liveboard_data:kura_repo_infos([shop_repo]),
+    ?assertEqual([module, pool], lists:sort(maps:keys(Repo))).
+
+only_the_shown_settings_are_read() ->
+    [Repo] = nova_liveboard_data:kura_repo_infos([shop_repo]),
+    Printed = iolist_to_binary(io_lib:format("~0tp", [Repo])),
+    ?assertEqual(nomatch, binary:match(Printed, ~"hunter2")),
+    ?assertEqual(nomatch, binary:match(Printed, ~"shop_user")).
+
+repo_whose_init_fails() ->
+    ok = application:set_env(kura, repos, #{
+        nova_liveboard_test_raising_repo => ?KURA:postgres(shop_pool)
+    }),
+    ?assertEqual(
+        [
+            #{
+                module => ~"nova_liveboard_test_raising_repo",
+                pool => #{
+                    status => ~"not available",
+                    reason => ~"kura could not say which pool the repo uses"
+                }
+            }
+        ],
+        nova_liveboard_data:kura_repo_infos([nova_liveboard_test_raising_repo])
+    ).
+
+repos_keep_their_order() ->
+    ?assertMatch(
+        [
+            #{module := ~"files_repo"},
+            #{module := ~"shop_repo"},
+            #{module := ~"files_repo"}
+        ],
+        nova_liveboard_data:kura_repo_infos([files_repo, shop_repo, files_repo])
+    ).

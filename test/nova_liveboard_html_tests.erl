@@ -134,6 +134,115 @@ sup_tree_error_test() ->
     Out = bin(nova_liveboard_html:sup_tree_html([foo], foo, {error, no_supervisor})),
     ?assert(contains(Out, ~"no supervisor found")).
 
+database_without_repos_test() ->
+    ?assert(contains(nova_liveboard_html:database_html([]), ~"no kura repos detected")).
+
+database_pool_figures_test() ->
+    Out = bin(
+        nova_liveboard_html:database_html([
+            #{
+                module => ~"shop_repo",
+                database => ~"shop",
+                host => ~"db.internal",
+                port => 5432,
+                configured_size => 10,
+                pool => #{
+                    status => ~"running",
+                    backend => ~"postgres (minato)",
+                    name => ~"shop_pool",
+                    figures => #{
+                        size => 10,
+                        in_use => 2,
+                        idle => 3,
+                        waiting => 1,
+                        counters => [{~"checkouts", 120}, {~"disconnects", 4}]
+                    }
+                }
+            }
+        ])
+    ),
+    [
+        ?assert(contains(Out, row(Label, Value)))
+     || {Label, Value} <- [
+            {~"database", ~"shop"},
+            {~"host", ~"db.internal"},
+            {~"port", ~"5432"},
+            {~"backend", ~"postgres (minato)"},
+            {~"pool size", ~"10"},
+            {~"in use", ~"2"},
+            {~"idle", ~"3"},
+            {~"waiting", ~"1"},
+            {~"checkouts", ~"120"},
+            {~"disconnects", ~"4"}
+        ]
+    ],
+    ?assert(contains(Out, ~"shop_pool <span class=\"status s2\">running</span>")),
+    ?assertNot(contains(Out, ~"configured size")),
+    ?assertNot(contains(Out, ~"pool figures")).
+
+database_pool_without_figures_test() ->
+    Out = bin(
+        nova_liveboard_html:database_html([
+            #{
+                module => ~"files_repo",
+                database => ~"priv/files.db",
+                configured_size => 4,
+                pool => #{
+                    status => ~"not available",
+                    backend => ~"sqlite",
+                    name => ~"files_repo",
+                    reason => ~"kura_pool_sqlite exports no function that reports pool figures"
+                }
+            }
+        ])
+    ),
+    ?assert(contains(Out, row(~"database", ~"priv/files.db"))),
+    ?assert(contains(Out, row(~"backend", ~"sqlite"))),
+    ?assert(contains(Out, ~"files_repo <span class=\"status idle\">not available</span>")),
+    ?assert(
+        contains(
+            Out,
+            row(
+                ~"pool figures",
+                ~"kura_pool_sqlite exports no function that reports pool figures"
+            )
+        )
+    ),
+    ?assert(contains(Out, row(~"configured size", ~"4"))),
+    [
+        ?assertNot(contains(Out, Label))
+     || Label <- [~">host<", ~">port<", ~">pool size<", ~">in use<", ~">idle<", ~">waiting<"]
+    ].
+
+database_pool_status_classes_test() ->
+    [
+        ?assert(
+            contains(
+                nova_liveboard_html:database_html([
+                    #{module => ~"shop_repo", pool => #{status => Status, reason => ~"why"}}
+                ]),
+                iolist_to_binary([
+                    ~"unknown <span class=\"status ", Class, ~"\">", Status, ~"</span>"
+                ])
+            )
+        )
+     || {Status, Class} <- [
+            {~"running", ~"s2"},
+            {~"no answer", ~"s4"},
+            {~"not started", ~"s5"},
+            {~"not available", ~"idle"}
+        ]
+    ].
+
+row(Label, Value) ->
+    iolist_to_binary([
+        ~"<div class=\"kv\"><span class=\"k\">",
+        Label,
+        ~"</span><span class=\"v\">",
+        Value,
+        ~"</span></div>"
+    ]).
+
 sample_request() ->
     #{
         id => ~"abc123",

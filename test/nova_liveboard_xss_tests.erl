@@ -134,6 +134,7 @@ renderers() ->
         {"request row", fun(X) -> ?HTML:request_row(request(X)) end},
         {"request detail", fun(X) -> ?HTML:request_detail_html(request(X)) end},
         {"database", fun(X) -> ?HTML:database_html([repo(X)]) end},
+        {"database figures", fun(X) -> ?HTML:database_html([repo_with_figures(X)]) end},
         {"schemas", fun(X) -> ?HTML:schemas_html([schema(X)]) end},
         {"page shell", fun(X) ->
             ?HTML:page(
@@ -216,10 +217,21 @@ repo(X) ->
     #{
         module => X,
         database => X,
-        hostname => binary_to_list(X),
+        host => X,
         port => X,
-        pool_size => 10,
-        pool => #{status => X, available => 1, checked_out => 2}
+        configured_size => X,
+        pool => #{status => X, backend => X, name => X, reason => X}
+    }.
+
+repo_with_figures(X) ->
+    Repo = repo(X),
+    Repo#{
+        pool => #{
+            status => X,
+            backend => X,
+            name => X,
+            figures => #{size => X, in_use => X, idle => X, waiting => X, counters => [{X, X}]}
+        }
     }.
 
 schema(X) ->
@@ -350,7 +362,14 @@ overview_values_are_escaped_test() ->
 kura_config_is_escaped_test() ->
     Html = iolist_to_binary(?HTML:database_html([repo(~"<script>alert(1)</script>")])),
     ?assertEqual(nomatch, binary:match(Html, ~"<script>")),
-    ?assertEqual(5, count(Html, ~"&lt;script&gt;")).
+    ?assertEqual(9, count(Html, ~"&lt;script&gt;")).
+
+kura_pool_figures_are_escaped_test() ->
+    Html = iolist_to_binary(
+        ?HTML:database_html([repo_with_figures(~"<script>alert(1)</script>")])
+    ),
+    ?assertEqual(nomatch, binary:match(Html, ~"<script>")),
+    ?assertEqual(13, count(Html, ~"&lt;script&gt;")).
 
 request_id_never_reaches_a_url_unencoded_test() ->
     application:set_env(nova_liveboard, prefix, ~"/liveboard"),

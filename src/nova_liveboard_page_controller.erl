@@ -191,7 +191,7 @@ safe_active() ->
     whereis(nova_liveboard_tracer) =/= undefined andalso nova_liveboard_tracer:active().
 
 kura_repos() ->
-    [nova_liveboard_data:kura_repo_info(R) || R <- nova_liveboard_data:kura_repos()].
+    nova_liveboard_data:kura_repo_infos(nova_liveboard_data:kura_repos()).
 
 kura_schemas() ->
     lists:append([nova_liveboard_data:kura_schemas(R) || R <- nova_liveboard_data:kura_repos()]).
