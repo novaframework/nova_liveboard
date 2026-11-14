@@ -6,7 +6,8 @@
 %% All pages, the per-region SSE streams, the request-trace actions and the
 %% static assets run on Nova's own listener under the configured prefix. The
 %% /sse/:page route returns {stream, ...}, held open by nova_liveboard_sse
-%% (see that module + novaframework/nova#387).
+%% (see that module + novaframework/nova#387). Assets are a closed set, not a
+%% wildcard directory: no request data is ever joined onto a path.
 routes(_Env) ->
     [
         #{
@@ -41,7 +42,15 @@ routes(_Env) ->
                 }},
                 {"/sse/:page", fun nova_liveboard_sse:stream/1, #{methods => [get]}},
                 {"/heartbeat", fun(_) -> {status, 200} end, #{methods => [get]}},
-                {"/assets/[...]", "static/assets"}
+                {"/assets/css/app.css", fun nova_liveboard_asset_controller:stylesheet/1, #{
+                    methods => [get]
+                }},
+                {"/assets/js/datastar.js", fun nova_liveboard_asset_controller:script/1, #{
+                    methods => [get]
+                }},
+                {"/assets/fonts/:font", fun nova_liveboard_asset_controller:font/1, #{
+                    methods => [get]
+                }}
             ]
         }
     ].
