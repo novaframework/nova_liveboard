@@ -23,11 +23,13 @@ What happens to them follows the `redact` application env:
   contains a digit becomes `[redacted]`; a port name is cut after the program;
   a child id is printed, capped at 200 characters; in a database name or
   host, what stands before an `@` and what follows a `?` becomes `[redacted]`.
-- `none`: the five values are shown as they are, capped in length.
+- `none`: the values are shown as they are, capped in length, except that a
+  database name or host is still masked before an `@` and after a `?`.
 - `all`: each of the five is shown as `[redacted]`.
 - `{Module, Function}`: `Module:Function(Kind, Value)` is called with
   `request_path`, `port_name`, `child_id`, `database` or `database_host` and
-  the value as a binary, and returns the binary to show. If it returns
+  the value as a binary, and returns the binary to show. A database name or
+  host reaches it already masked before an `@` and after a `?`. If it returns
   anything else or fails, the value is shown as `[redacted]`.
 
 Anything else is treated as `all`.
@@ -93,9 +95,9 @@ database_host(Host) ->
 connection_setting(Kind, Value) ->
     case nova_liveboard:redact() of
         standard -> capped(without_credentials(Value));
-        none -> capped(Value);
+        none -> capped(without_credentials(Value));
         all -> ?REDACTED;
-        {callback, Callback} -> asked(Callback, Kind, Value)
+        {callback, Callback} -> asked(Callback, Kind, without_credentials(Value))
     end.
 
 -spec asked({module(), atom()}, kind(), binary()) -> binary().

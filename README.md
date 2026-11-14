@@ -253,11 +253,14 @@ database name and host of a Kura repo (a URL with a user and password in it).
   printed, capped at 200 characters; in a database name or host, what stands
   before an `@` and what follows a `?` is masked, so
   `postgres://app:secret@db/prod` becomes `postgres://[redacted]@db/prod`.
-- `none` - the five are shown as they are, capped in length.
+- `none` - the values are shown as they are, capped in length, except that a
+  database name or host is still masked before an `@` and after a `?`: a
+  credential written into a connection URL is never shown under any setting.
 - `all` - each of the five is shown as `[redacted]`.
 - `{Module, Function}` - `Module:Function(Kind, Value)` is called with
   `request_path`, `port_name`, `child_id`, `database` or `database_host` and
-  the value as a binary, and returns the binary to show. If it returns
+  the value as a binary, and returns the binary to show. A database name or
+  host reaches it already masked. If it returns
   anything else or fails, the value is shown as `[redacted]`, so a callback
   without a clause for the two database kinds hides them.
 

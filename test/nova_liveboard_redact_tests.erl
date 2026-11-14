@@ -14,7 +14,7 @@ redact_test_() ->
         fun standard_prints_child_ids_bounded/0,
         fun standard_masks_credentials_in_a_database_name_and_host/0,
         fun standard_keeps_ordinary_database_names_and_hosts/0,
-        fun none_shows_everything_bounded/0,
+        fun none_masks_only_database_credentials/0,
         fun all_hides_everything/0,
         fun callback_decides/0,
         fun failing_callback_hides_the_value/0,
@@ -103,13 +103,13 @@ standard_keeps_ordinary_database_names_and_hosts() ->
         ]
     ].
 
-none_shows_everything_bounded() ->
+none_masks_only_database_credentials() ->
     application:set_env(nova_liveboard, redact, none),
     Path = <<"/reset/", ?HEX/binary>>,
     ?assertEqual(Path, ?M:request_path(Path)),
     ?assertEqual(~"psql -h db", ?M:port_name(~"psql -h db")),
-    ?assertEqual(~"app:hunter2@db.internal", ?M:database(~"app:hunter2@db.internal")),
-    ?assertEqual(~"app:hunter2@db.internal", ?M:database_host(~"app:hunter2@db.internal")),
+    ?assertEqual(~"[redacted]@db.internal", ?M:database(~"app:hunter2@db.internal")),
+    ?assertEqual(~"[redacted]@db.internal", ?M:database_host(~"app:hunter2@db.internal")),
     Long = binary:copy(~"a", 9000),
     ?assertEqual(515, byte_size(?M:request_path(Long))),
     ?assertEqual(515, byte_size(?M:port_name(Long))),
@@ -131,6 +131,7 @@ callback_decides() ->
     ?assertEqual(~"a port", ?M:port_name(~"psql -h db")),
     ?assertEqual(~"child {pool,main}", ?M:child_id({pool, main})),
     ?assertEqual(~"shop", ?M:database(~"shop")),
+    ?assertEqual(~"[redacted]@db/shop", ?M:database(~"app:hunter2@db/shop")),
     ?assertEqual(~"a host", ?M:database_host(~"db.internal")).
 
 failing_callback_hides_the_value() ->

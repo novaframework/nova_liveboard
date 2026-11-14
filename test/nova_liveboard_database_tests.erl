@@ -100,7 +100,7 @@ secrets_test_() ->
             fun no_secret_when_kura_fails_with_the_configuration/0,
             fun no_secret_under_all/0,
             fun no_secret_when_the_redact_callback_fails/0,
-            fun none_shows_the_name_and_host_as_configured/0
+            fun none_still_masks_credentials_in_the_name_and_host/0
         ]}.
 
 with_secrets() ->
@@ -192,21 +192,10 @@ no_secret_when_the_redact_callback_fails() ->
     ?assertNotEqual(nomatch, binary:match(Page, row(~"database", ~"[redacted]"))),
     ?assertNotEqual(nomatch, binary:match(Page, row(~"host", ~"[redacted]"))).
 
-%% `none` is the host's choice to see the two as they are written. The other
-%% settings are not read under any choice.
-none_shows_the_name_and_host_as_configured() ->
+none_still_masks_credentials_in_the_name_and_host() ->
     application:set_env(nova_liveboard, redact, none),
-    Logged = nova_liveboard_test_log:logged(fun() ->
-        Page = page(),
-        ?assertEqual(nomatch, binary:match(Page, list_to_binary(?SECRET))),
-        ?assertNotEqual(
-            nomatch,
-            binary:match(
-                Page, row(~"host", list_to_binary(?IN_URL ++ ":" ++ ?IN_URL ++ "@db.internal"))
-            )
-        )
-    end),
-    ?assertEqual(nomatch, binary:match(Logged, list_to_binary(?SECRET))).
+    Page = without_secrets(),
+    ?assertNotEqual(nomatch, binary:match(Page, row(~"host", ~"[redacted]@db.internal"))).
 
 %% The page, once neither it, nor what it was rendered from, nor anything
 %% logged while it was made holds a secret.
