@@ -336,5 +336,6 @@ not resolve `.` and `..` in a request path before matching it.
 
 ## Licence
 
-Apache-2.0, see [LICENSE](LICENSE). The bundled fonts have their own licence
-in `priv/static/assets/fonts/NOTICE`.
+Apache-2.0, see [LICENSE](LICENSE). The bundled fonts and the bundled Datastar
+script have their own licences in `priv/static/assets/fonts/NOTICE` and
+`priv/static/assets/js/NOTICE`.
