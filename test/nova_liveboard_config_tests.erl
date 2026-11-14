@@ -139,6 +139,10 @@ the_failure_never_carries_the_value() ->
     application:set_env(nova_liveboard, auth, {basic, ~"operator", ?SECRET}),
     {error, Invalid} = nova_liveboard:validate(),
     ?assertEqual(?KEYS, [Key || {Key, _Accepted} <- Invalid]),
+    Refused = quiet(fun() ->
+        [nova_liveboard_app:start(normal, []), nova_liveboard:auth(), mount_failure()]
+    end),
+    ?assertMatch([{error, {invalid_config, _}} | _], Refused),
     Logged = [
         logged(fun() -> nova_liveboard_app:start(normal, []) end),
         logged(fun mount_failure/0),
@@ -148,16 +152,7 @@ the_failure_never_carries_the_value() ->
         end)
     ],
     ?assertMatch([[_ | _], [_ | _], [_ | _]], Logged),
-    Failures = quiet(fun() ->
-        [
-            Invalid,
-            nova_liveboard_app:start(normal, []),
-            nova_liveboard:auth(),
-            mount_failure(),
-            Logged
-        ]
-    end),
-    Printed = io_lib:format("~0tp", [Failures]),
+    Printed = io_lib:format("~0tp", [[Invalid, Refused, Logged, quiet(fun mount_failure/0)]]),
     ?assertEqual(nomatch, string:find(Printed, "horse")),
     ?assertNotEqual(nomatch, string:find(Printed, "invalid_auth")),
     ?assertNotEqual(nomatch, string:find(Printed, "invalid_config")).
