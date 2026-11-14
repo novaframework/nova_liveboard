@@ -17,6 +17,20 @@ Two jobs in one `gen_server`:
    process to the owning request by walking the parent chain, and attaches the
    resulting spawned-process tree to the request record on `finalize/2`.
 
+A deep trace normally ends in `finalize/2`. A request that never gets there
+(its handler crashed, it was upgraded to a websocket, the client went away)
+would otherwise keep its bookkeeping forever, so in-flight traces are bounded
+three ways:
+
+- the request process is monitored and its trace is dropped when it exits;
+- a trace older than 60 seconds is dropped by a periodic sweep, and the
+  request is then listed without a spawned tree;
+- at most 64 traces are in flight and at most 5000 processes are followed
+  over all of them. Beyond that a request is not traced and a spawned process
+  is not followed.
+
+A dropped trace has tracing turned off for every process it followed.
+
 The dashboard works without any of this; only the Requests page needs the
 plugin registered.
 """.
@@ -25,6 +39,7 @@ plugin registered.
 
 -export([
     start_link/0,
+    start_link/1,
     maybe_arm/2,
     finalize/2,
     recent/0,
@@ -34,12 +49,14 @@ plugin registered.
     start_trace/1,
     stop_trace/0,
     trace_state/0,
+    in_flight/0,
     active/0
 ]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -define(SERVER, ?MODULE).
+-define(LIMITS, #{max_traces => 64, max_pids => 5000, max_age_ms => 60000, sweep_ms => 5000}).
 
 -record(state, {
     requests = [] :: [map()],
@@ -50,25 +67,52 @@ plugin registered.
     %% in-flight deep traces, keyed by request id
     traces = #{} :: #{binary() => trace_acc()},
     %% any currently-traced pid -> the request id that owns it
-    pid2req = #{} :: #{pid() => binary()}
+    pid2req = #{} :: #{pid() => binary()},
+    %% the monitor on each traced request process -> its request id
+    monitors = #{} :: #{reference() => binary()},
+    limits = ?LIMITS :: limits(),
+    sweep = undefined :: reference() | undefined
 }).
 
--type trace_acc() :: #{nodes := [map()], depths := #{pid() => non_neg_integer()}}.
+-type trace_acc() :: #{
+    monitor := reference(),
+    started := integer(),
+    nodes := [map()],
+    depths := #{pid() => non_neg_integer()}
+}.
+-type limits() :: #{
+    max_traces := pos_integer(),
+    max_pids := pos_integer(),
+    max_age_ms := pos_integer(),
+    sweep_ms := pos_integer()
+}.
+
+-export_type([limits/0]).
 
 %% ---------------------------------------------------------------------------
 %% api
 %% ---------------------------------------------------------------------------
 
--spec start_link() -> {ok, pid()}.
+-spec start_link() -> gen_server:start_ret().
 start_link() ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+    start_link(#{}).
+
+-doc """
+As `start_link/0`, with some of the bounds on in-flight deep traces replaced:
+`max_traces` (64), `max_pids` (5000), `max_age_ms` (60000) and `sweep_ms`
+(5000).
+""".
+-spec start_link(#{atom() => pos_integer()}) -> gen_server:start_ret().
+start_link(Limits) ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, Limits, []).
 
 -doc """
 Ask whether the request `ReqId` handled by `RootPid` should be deep-traced.
 
-Returns `trace` (and registers the root pid) when deep trace is armed, else
-`no_trace`. The caller (the request process) is responsible for calling
-`erlang:trace/3` on itself when `trace` is returned.
+Returns `trace` (and registers and monitors the root pid) when deep trace is
+armed and fewer than `max_traces` traces are in flight, else `no_trace`. The
+caller (the request process) is responsible for calling `erlang:trace/3` on
+itself when `trace` is returned.
 """.
 -spec maybe_arm(binary(), pid()) -> trace | no_trace.
 maybe_arm(ReqId, RootPid) ->
@@ -101,6 +145,16 @@ stop_trace() -> gen_server:cast(?SERVER, stop_trace).
 -spec trace_state() -> map().
 trace_state() -> gen_server:call(?SERVER, trace_state).
 
+-doc "How many deep traces are in flight and how many processes they follow.".
+-spec in_flight() -> #{traces := non_neg_integer(), pids := non_neg_integer()}.
+in_flight() ->
+    case gen_server:call(?SERVER, in_flight) of
+        #{traces := Traces, pids := Pids} when
+            is_integer(Traces), Traces >= 0, is_integer(Pids), Pids >= 0
+        ->
+            #{traces => Traces, pids => Pids}
+    end.
+
 -doc "Whether any request has been captured (a proxy for 'plugin is wired up').".
 -spec active() -> boolean().
 active() -> gen_server:call(?SERVER, active).
@@ -109,18 +163,30 @@ active() -> gen_server:call(?SERVER, active).
 %% gen_server
 %% ---------------------------------------------------------------------------
 
-init([]) ->
-    {ok, #state{cap = nova_liveboard:request_buffer()}}.
+init(Limits) when is_map(Limits) ->
+    {ok, #state{cap = nova_liveboard:request_buffer(), limits = limits(Limits)}}.
 
-handle_call({maybe_arm, ReqId, RootPid}, _From, #state{armed = N} = S) when N > 0 ->
-    Acc = #{nodes => [], depths => #{RootPid => 0}},
+handle_call({maybe_arm, ReqId, RootPid}, _From, #state{armed = N} = S) when
+    N > 0,
+    is_binary(ReqId),
+    is_pid(RootPid),
+    map_size(S#state.traces) < map_get(max_traces, S#state.limits)
+->
+    Monitor = erlang:monitor(process, RootPid),
+    Acc = #{
+        monitor => Monitor,
+        started => erlang:monotonic_time(millisecond),
+        nodes => [],
+        depths => #{RootPid => 0}
+    },
     S1 = S#state{
         armed = N - 1,
         active = true,
         traces = (S#state.traces)#{ReqId => Acc},
-        pid2req = (S#state.pid2req)#{RootPid => ReqId}
+        pid2req = (S#state.pid2req)#{RootPid => ReqId},
+        monitors = (S#state.monitors)#{Monitor => ReqId}
     },
-    {reply, trace, notify_trace_state(S1)};
+    {reply, trace, notify_trace_state(schedule_sweep(S1))};
 handle_call({maybe_arm, _ReqId, _RootPid}, _From, S) ->
     {reply, no_trace, S#state{active = true}};
 handle_call(recent, _From, S) ->
@@ -137,6 +203,8 @@ handle_call({subscribe, Pid}, _From, S) ->
     {reply, ok, S#state{subs = (S#state.subs)#{Ref => Pid}}};
 handle_call(trace_state, _From, S) ->
     {reply, trace_state_map(S), S};
+handle_call(in_flight, _From, S) ->
+    {reply, #{traces => map_size(S#state.traces), pids => map_size(S#state.pid2req)}, S};
 handle_call(active, _From, S) ->
     {reply, S#state.active, S};
 handle_call(_Req, _From, S) ->
@@ -159,10 +227,17 @@ handle_cast(stop_trace, S) ->
 handle_cast(_Msg, S) ->
     {noreply, S}.
 
-handle_info({trace, Parent, spawn, Child, MFA}, S) ->
+handle_info({trace, Parent, spawn, Child, MFA}, S) when is_pid(Parent), is_pid(Child) ->
     {noreply, record_spawn(Parent, Child, MFA, S)};
 handle_info({'DOWN', Ref, process, _Pid, _Reason}, S) ->
-    {noreply, S#state{subs = maps:remove(Ref, S#state.subs)}};
+    case S#state.monitors of
+        #{Ref := ReqId} -> {noreply, drop_traces([ReqId], S)};
+        #{} -> {noreply, S#state{subs = maps:remove(Ref, S#state.subs)}}
+    end;
+handle_info(sweep, S) ->
+    Oldest = erlang:monotonic_time(millisecond) - map_get(max_age_ms, S#state.limits),
+    Expired = [ReqId || ReqId := #{started := Started} <- S#state.traces, Started =< Oldest],
+    {noreply, schedule_sweep(drop_traces(Expired, S#state{sweep = undefined}))};
 handle_info(_Msg, S) ->
     {noreply, S}.
 
@@ -171,10 +246,9 @@ handle_info(_Msg, S) ->
 %% ---------------------------------------------------------------------------
 
 record_spawn(Parent, Child, MFA, S) ->
-    case maps:find(Parent, S#state.pid2req) of
-        {ok, ReqId} ->
-            Acc = maps:get(ReqId, S#state.traces),
-            Depths = maps:get(depths, Acc),
+    case S#state.pid2req of
+        #{Parent := ReqId} when map_size(S#state.pid2req) < map_get(max_pids, S#state.limits) ->
+            #{nodes := Nodes, depths := Depths} = Acc = maps:get(ReqId, S#state.traces),
             Depth = maps:get(Parent, Depths, 0) + 1,
             Node = #{
                 pid => pid_bin(Child),
@@ -182,30 +256,44 @@ record_spawn(Parent, Child, MFA, S) ->
                 parent => pid_bin(Parent),
                 depth => Depth
             },
-            Acc1 = Acc#{
-                nodes => [Node | maps:get(nodes, Acc)],
-                depths => Depths#{Child => Depth}
-            },
+            Acc1 = Acc#{nodes := [Node | Nodes], depths := Depths#{Child => Depth}},
             S#state{
                 traces = (S#state.traces)#{ReqId => Acc1},
                 pid2req = (S#state.pid2req)#{Child => ReqId}
             };
-        error ->
+        #{Parent := _ReqId} ->
+            untrace([Child]),
+            S;
+        #{} ->
             S
     end.
 
 take_trace(ReqId, S) ->
-    case maps:take(ReqId, S#state.traces) of
-        {Acc, Traces1} ->
-            Pids = maps:keys(maps:get(depths, Acc)),
-            untrace(Pids),
-            Pid2Req1 = maps:without(Pids, S#state.pid2req),
-            Tree = lists:reverse(maps:get(nodes, Acc)),
-            {Tree, S#state{traces = Traces1, pid2req = Pid2Req1}};
-        error ->
-            {[], S}
+    case S#state.traces of
+        #{ReqId := #{nodes := Nodes}} -> {lists:reverse(Nodes), drop_traces([ReqId], S)};
+        #{} -> {[], S}
     end.
 
+%% Forgets the traces of `ReqIds` and stops tracing every process they
+%% followed.
+-spec drop_traces([binary()], #state{}) -> #state{}.
+drop_traces([], S) ->
+    S;
+drop_traces([ReqId | Rest], S) ->
+    case maps:take(ReqId, S#state.traces) of
+        {#{monitor := Monitor, depths := Depths}, Traces} ->
+            true = erlang:demonitor(Monitor, [flush]),
+            untrace(maps:keys(Depths)),
+            drop_traces(Rest, S#state{
+                traces = Traces,
+                pid2req = #{Pid => Owner || Pid := Owner <- S#state.pid2req, Owner =/= ReqId},
+                monitors = maps:remove(Monitor, S#state.monitors)
+            });
+        error ->
+            drop_traces(Rest, S)
+    end.
+
+-spec untrace([pid()]) -> ok.
 untrace(Pids) ->
     lists:foreach(
         fun(Pid) ->
@@ -217,6 +305,30 @@ untrace(Pids) ->
         end,
         Pids
     ).
+
+-spec schedule_sweep(#state{}) -> #state{}.
+schedule_sweep(#state{sweep = undefined, traces = Traces, limits = #{sweep_ms := Every}} = S) when
+    map_size(Traces) > 0
+->
+    S#state{sweep = erlang:send_after(Every, self(), sweep)};
+schedule_sweep(S) ->
+    S.
+
+-spec limits(#{atom() => term()}) -> limits().
+limits(Given) ->
+    #{
+        max_traces => limit(max_traces, Given),
+        max_pids => limit(max_pids, Given),
+        max_age_ms => limit(max_age_ms, Given),
+        sweep_ms => limit(sweep_ms, Given)
+    }.
+
+-spec limit(max_traces | max_pids | max_age_ms | sweep_ms, #{atom() => term()}) -> pos_integer().
+limit(Key, Given) ->
+    case Given of
+        #{Key := Value} when is_integer(Value), Value > 0 -> Value;
+        #{} -> map_get(Key, ?LIMITS)
+    end.
 
 %% ---------------------------------------------------------------------------
 %% notifications
