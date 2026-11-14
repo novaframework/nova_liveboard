@@ -67,16 +67,25 @@ spawned - overhead is only paid while armed.
 
 ## Configuration
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `auth` | no default, **required** | who may reach the liveboard, see [Authentication](#authentication-required) |
-| `prefix` | `"/liveboard"` | mount path. Set it here only: a `prefix` on the `nova_apps` entry is prepended on top of it and breaks the liveboard's links |
-| `refresh_ms` | `2000` | repaint interval for polled streams |
-| `request_buffer` | `200` | recent requests retained |
-| `max_streams` | `50` | live streams open at once, over all viewers. Each open page uses two. Further streams get `503`; the page still renders, it just does not update |
-| `stream_lifetime_ms` | `300000` | how long one live stream stays open before the browser reconnects and is authenticated again |
-| `redact` | `standard` | what of request paths, port names and child ids is masked, see [Redaction](#redaction) |
-| `trusted_origins` | `[]` | extra origins accepted for actions, see [Actions and CSRF](#actions-and-csrf) |
+| Key | Default | Accepted | Meaning |
+|-----|---------|----------|---------|
+| `auth` | no default, **required** | `{Module, Function}` or `none` | who may reach the liveboard, see [Authentication](#authentication-required) |
+| `prefix` | `"/liveboard"` | a string or binary: empty, or starting with `/` and not ending with `/` | mount path; empty mounts at the root. Set it here only: a `prefix` on the `nova_apps` entry is prepended on top of it and breaks the liveboard's links |
+| `refresh_ms` | `2000` | a positive integer | repaint interval for polled streams |
+| `request_buffer` | `200` | a positive integer | recent requests retained |
+| `max_streams` | `50` | a non-negative integer | live streams open at once, over all viewers. Each open page uses two. Further streams get `503`; the page still renders, it just does not update |
+| `stream_lifetime_ms` | `300000` | a positive integer | how long one live stream stays open before the browser reconnects and is authenticated again |
+| `redact` | `standard` | `standard`, `none`, `all` or `{Module, Function}` with `Module:Function/2` exported | what of request paths, port names and child ids is masked, see [Redaction](#redaction) |
+| `trusted_origins` | `[]` | a list of binaries, each a scheme and a host such as `~"https://ops.example.com"` | extra origins accepted for actions, see [Actions and CSRF](#actions-and-csrf) |
+
+The settings are checked when Nova builds the liveboard's routes and again
+when the `nova_liveboard` application starts. A value that is not accepted
+stops the node from starting: building the routes fails with
+`{nova_liveboard_refusing_to_mount, {invalid_config, [{Key, Accepted}]}}` and
+the application with `{invalid_config, [{Key, Accepted}]}`, and both log an
+error first. The failure lists every key that is wrong and what it accepts,
+never the value that was set, so a secret put under the wrong key does not
+end up in a log.
 
 ## Security
 
@@ -132,6 +141,9 @@ The liveboard does not mount until the host has decided who may reach it.
 With `auth` missing or set to anything else, building the routes fails with
 `{nova_liveboard_refusing_to_mount, Reason}` and Nova does not start. A
 callback that is not an exported `Module:Function/1` is rejected the same way.
+`Reason` is `auth_not_configured`, `invalid_auth` or
+`{auth_callback_not_exported, {Module, Function, 1}}`; it does not repeat the
+value that was set.
 
 A complete callback using HTTP basic auth:
 

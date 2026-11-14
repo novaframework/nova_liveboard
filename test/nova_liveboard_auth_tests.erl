@@ -38,12 +38,23 @@ invalid_auth_refuses_to_mount() ->
     [
         begin
             application:set_env(nova_liveboard, auth, Value),
+            ?assertEqual({Value, {error, invalid_auth}}, {Value, nova_liveboard:auth()}),
             ?assertError(
-                {nova_liveboard_refusing_to_mount, {invalid_auth, Value}},
+                {nova_liveboard_refusing_to_mount, invalid_auth},
                 nova_liveboard_router:routes(dev)
             )
         end
-     || Value <- [false, true, undefined, ~"none", "none", fun erlang:is_map/1, {a, b, c}, []]
+     || Value <- [
+            false,
+            true,
+            undefined,
+            ~"none",
+            "none",
+            fun erlang:is_map/1,
+            {a, b, c},
+            [],
+            {basic, ~"operator", ~"correct horse"}
+        ]
     ].
 
 unexported_callback_refuses_to_mount() ->

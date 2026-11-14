@@ -59,8 +59,17 @@ routes(_Env) ->
 
 %% The liveboard shows the node's processes, tables, ports and request
 %% traffic, so it never mounts without the host having decided who may reach
-%% it.
+%% it, and never on settings it would have to guess at. Nova builds the routes
+%% while it starts, which can be before this application is loaded: loading
+%% it here makes the env it is configured with visible.
 security() ->
+    _ = application:load(nova_liveboard),
+    case nova_liveboard:validate() of
+        ok -> auth();
+        {error, Invalid} -> refuse({invalid_config, Invalid}, ~"set each key to what it accepts")
+    end.
+
+auth() ->
     case nova_liveboard:auth() of
         {ok, none} ->
             ?LOG_WARNING(#{
@@ -71,10 +80,12 @@ security() ->
         {ok, {Module, Function}} ->
             fun Module:Function/1;
         {error, Reason} ->
-            ?LOG_ERROR(#{
-                msg => ~"nova_liveboard_refusing_to_mount",
-                reason => Reason,
-                fix => ~"set {auth, {Module, Function}} or {auth, none} in the nova_liveboard env"
-            }),
-            error({nova_liveboard_refusing_to_mount, Reason})
+            refuse(
+                Reason, ~"set {auth, {Module, Function}} or {auth, none} in the nova_liveboard env"
+            )
     end.
+
+-spec refuse(term(), binary()) -> no_return().
+refuse(Reason, Fix) ->
+    ?LOG_ERROR(#{msg => ~"nova_liveboard_refusing_to_mount", reason => Reason, fix => Fix}),
+    error({nova_liveboard_refusing_to_mount, Reason}).
