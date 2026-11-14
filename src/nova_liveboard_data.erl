@@ -163,7 +163,9 @@ port_info() ->
                     _ ->
                         {true, #{
                             id => format_port(Port),
-                            name => list_to_binary(proplists:get_value(name, Info, "")),
+                            name => nova_liveboard_redact:port_name(
+                                list_to_binary(proplists:get_value(name, Info, ""))
+                            ),
                             connected => format_pid(proplists:get_value(connected, Info)),
                             input => proplists:get_value(input, Info, 0),
                             output => proplists:get_value(output, Info, 0)
@@ -522,7 +524,7 @@ build_tree(Pid) ->
     end.
 
 format_child_id(Id) when is_atom(Id) -> atom_to_binary(Id);
-format_child_id(Id) -> iolist_to_binary(io_lib:format("~p", [Id])).
+format_child_id(Id) -> nova_liveboard_redact:child_id(Id).
 
 format_child_pid(Pid) when is_pid(Pid) -> list_to_binary(pid_to_list(Pid));
 format_child_pid(undefined) -> ~"undefined";

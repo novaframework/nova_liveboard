@@ -12,6 +12,7 @@ All settings live under the `nova_liveboard` application env:
   open before the browser has to reconnect.
 - `auth` (no default) - who may use the liveboard, see `auth/0`.
 - `trusted_origins` (default `[]`) - see `trusted_origins/0`.
+- `redact` (default `standard`) - see `m:nova_liveboard_redact`.
 """.
 
 -export([
@@ -21,7 +22,8 @@ All settings live under the `nova_liveboard` application env:
     max_streams/0,
     stream_lifetime_ms/0,
     auth/0,
-    trusted_origins/0
+    trusted_origins/0,
+    redact/0
 ]).
 
 -type auth() :: none | {module(), atom()}.
@@ -108,4 +110,22 @@ trusted_origins() ->
     case application:get_env(nova_liveboard, trusted_origins, []) of
         Origins when is_list(Origins) -> [Origin || Origin <- Origins, is_binary(Origin)];
         _ -> []
+    end.
+
+-doc """
+How request paths, port names and child ids are masked before they are shown;
+see `m:nova_liveboard_redact`. The `redact` env is `standard`, `none`, `all`
+or `{Module, Function}`. Anything else is treated as `all`.
+""".
+-spec redact() -> standard | none | all | {callback, {module(), atom()}}.
+redact() ->
+    case application:get_env(nova_liveboard, redact, standard) of
+        standard ->
+            standard;
+        none ->
+            none;
+        {Module, Function} when is_atom(Module), is_atom(Function) ->
+            {callback, {Module, Function}};
+        _ ->
+            all
     end.

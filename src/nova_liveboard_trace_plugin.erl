@@ -19,6 +19,10 @@ armed - turns on scoped process tracing of the handling process.
 hands the summary to `nova_liveboard_tracer`. The whole chain runs in one
 process, so the marker stashed in `Req` survives from pre to post.
 
+Only the path is captured, never the query string, and it passes through
+`nova_liveboard_redact:request_path/1` first, so neither the marker nor the
+tracer ever holds the original.
+
 The dashboard's own routes are skipped so it never traces itself (its SSE
 streams never return, and would otherwise never finalise).
 """.
@@ -45,7 +49,7 @@ pre_request(Req, Env, _Opts, State) ->
                 t0 => erlang:monotonic_time(microsecond),
                 reds0 => reductions(),
                 method => cowboy_req:method(Req),
-                path => cowboy_req:path(Req),
+                path => nova_liveboard_redact:request_path(cowboy_req:path(Req)),
                 handler => handler_mfa(Env),
                 traced => Traced
             },

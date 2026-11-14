@@ -243,4 +243,4 @@ format_mfa({M, F, Args}) when is_list(Args) ->
 format_mfa({M, F, A}) when is_integer(A) ->
     iolist_to_binary(io_lib:format("~s:~s/~b", [M, F, A]));
 format_mfa(Other) ->
-    iolist_to_binary(io_lib:format("~p", [Other])).
+    unicode:characters_to_binary(io_lib:format("~0tp", [Other], [{chars_limit, 200}])).
