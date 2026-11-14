@@ -81,5 +81,20 @@ unnamed_top_supervisor_test_() ->
                 ?assertEqual(2, length(Tree)),
                 ?assertEqual([~"plain"], [Name || #{name := Name} <- Tree, Name =:= ~"plain"]),
                 ?assertEqual([worker, worker], [Type || #{type := Type} <- Tree])
-            end}
+            end},
+            fun() ->
+                [Unnamed] = [
+                    App
+                 || #{name := ~"nova_liveboard_test_unnamed"} = App <-
+                        nova_liveboard_data:running_applications()
+                ],
+                ?assertEqual(
+                    #{
+                        name => ~"nova_liveboard_test_unnamed",
+                        description => ~"Unnamed \x{2192} top supervisor",
+                        version => ~"1.0.0"
+                    },
+                    Unnamed
+                )
+            end
         ]}.

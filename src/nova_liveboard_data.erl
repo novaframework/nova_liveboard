@@ -144,8 +144,8 @@ running_applications() ->
     [
         #{
             name => atom_to_binary(Name),
-            description => list_to_binary(Desc),
-            version => list_to_binary(Vsn)
+            description => unicode_binary(Desc),
+            version => unicode_binary(Vsn)
         }
      || {Name, Desc, Vsn} <- lists:sort(Apps)
     ].
@@ -403,6 +403,15 @@ format_ets_id(Tab) when is_reference(Tab) ->
     list_to_binary(ref_to_list(Tab));
 format_ets_id(Tab) ->
     iolist_to_binary(io_lib:format("~p", [Tab])).
+
+%% An application's description and version are whatever its `.app` file
+%% says; `list_to_binary/1` fails on a character above 255.
+-spec unicode_binary(unicode:chardata()) -> binary().
+unicode_binary(Text) ->
+    case unicode:characters_to_binary(Text) of
+        Binary when is_binary(Binary) -> Binary;
+        {_, Readable, _Rest} -> Readable
+    end.
 
 -spec format_bytes(non_neg_integer()) -> binary().
 format_bytes(Bytes) when Bytes >= 1073741824 ->
