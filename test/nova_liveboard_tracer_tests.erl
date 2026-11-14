@@ -48,9 +48,9 @@ ring_buffer_caps(_) ->
 get_and_recent(_) ->
     ?_test(begin
         nova_liveboard_tracer:finalize(~"g1", summary(~"g1")),
-        R = nova_liveboard_tracer:get(~"g1"),
-        ?assertEqual(~"g1", maps:get(id, R)),
-        ?assertEqual(0, maps:get(spawned, R)),
+        #{id := Id, spawned := Spawned} = nova_liveboard_tracer:get(~"g1"),
+        ?assertEqual(~"g1", Id),
+        ?assertEqual(0, Spawned),
         ?assertEqual(undefined, nova_liveboard_tracer:get(~"missing"))
     end).
 
@@ -187,12 +187,18 @@ followed_processes_are_capped(_) ->
 
 %% helpers
 
+-spec tracer() -> pid().
+tracer() ->
+    case whereis(nova_liveboard_tracer) of
+        Tracer when is_pid(Tracer) -> Tracer
+    end.
+
 %% A request process that is deep-traced the way the plugin does it, has
 %% spawned one process and then waits to be told to end, without ever
 %% reaching `finalize/2`.
 request_process(ReqId, Exit) ->
     Test = self(),
-    Tracer = whereis(nova_liveboard_tracer),
+    Tracer = tracer(),
     Before = maps:get(pids, nova_liveboard_tracer:in_flight()),
     Request = spawn(fun() ->
         trace = nova_liveboard_tracer:maybe_arm(ReqId, self()),

@@ -169,4 +169,4 @@ mem() ->
     end.
 
 new_id() ->
-    string:lowercase(binary:encode_hex(crypto:strong_rand_bytes(6))).
+    binary:encode_hex(crypto:strong_rand_bytes(6), lowercase).

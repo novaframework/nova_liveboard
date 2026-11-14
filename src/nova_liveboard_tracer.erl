@@ -87,7 +87,9 @@ plugin registered.
     sweep_ms := pos_integer()
 }.
 
--export_type([limits/0]).
+-type trace_state() :: #{armed := boolean(), remaining := non_neg_integer()}.
+
+-export_type([limits/0, trace_state/0]).
 
 %% ---------------------------------------------------------------------------
 %% api
@@ -116,7 +118,10 @@ itself when `trace` is returned.
 """.
 -spec maybe_arm(binary(), pid()) -> trace | no_trace.
 maybe_arm(ReqId, RootPid) ->
-    gen_server:call(?SERVER, {maybe_arm, ReqId, RootPid}).
+    case gen_server:call(?SERVER, {maybe_arm, ReqId, RootPid}) of
+        trace -> trace;
+        no_trace -> no_trace
+    end.
 
 -doc "Record a completed request; attaches the spawned tree if it was traced.".
 -spec finalize(binary(), map()) -> ok.
@@ -124,17 +129,25 @@ finalize(ReqId, Summary) ->
     gen_server:cast(?SERVER, {finalize, ReqId, Summary}).
 
 -spec recent() -> [map()].
-recent() -> gen_server:call(?SERVER, recent).
+recent() ->
+    [Request || Request <- gen_server:call(?SERVER, recent), is_map(Request)].
 
 -spec get(binary()) -> map() | undefined.
-get(ReqId) -> gen_server:call(?SERVER, {get, ReqId}).
+get(ReqId) ->
+    case gen_server:call(?SERVER, {get, ReqId}) of
+        Request when is_map(Request) -> Request;
+        undefined -> undefined
+    end.
 
 -spec clear() -> ok.
 clear() -> gen_server:cast(?SERVER, clear).
 
 -doc "Register the caller for live request + trace-state notifications.".
 -spec subscribe() -> ok.
-subscribe() -> gen_server:call(?SERVER, {subscribe, self()}).
+subscribe() ->
+    case gen_server:call(?SERVER, {subscribe, self()}) of
+        ok -> ok
+    end.
 
 -spec start_trace(pos_integer()) -> ok.
 start_trace(N) -> gen_server:cast(?SERVER, {start_trace, N}).
@@ -142,8 +155,14 @@ start_trace(N) -> gen_server:cast(?SERVER, {start_trace, N}).
 -spec stop_trace() -> ok.
 stop_trace() -> gen_server:cast(?SERVER, stop_trace).
 
--spec trace_state() -> map().
-trace_state() -> gen_server:call(?SERVER, trace_state).
+-spec trace_state() -> trace_state().
+trace_state() ->
+    case gen_server:call(?SERVER, trace_state) of
+        #{armed := Armed, remaining := Remaining} when
+            is_boolean(Armed), is_integer(Remaining), Remaining >= 0
+        ->
+            #{armed => Armed, remaining => Remaining}
+    end.
 
 -doc "How many deep traces are in flight and how many processes they follow.".
 -spec in_flight() -> #{traces := non_neg_integer(), pids := non_neg_integer()}.
@@ -157,15 +176,20 @@ in_flight() ->
 
 -doc "Whether any request has been captured (a proxy for 'plugin is wired up').".
 -spec active() -> boolean().
-active() -> gen_server:call(?SERVER, active).
+active() ->
+    case gen_server:call(?SERVER, active) of
+        Active when is_boolean(Active) -> Active
+    end.
 
 %% ---------------------------------------------------------------------------
 %% gen_server
 %% ---------------------------------------------------------------------------
 
+-spec init(#{atom() => term()}) -> {ok, #state{}}.
 init(Limits) when is_map(Limits) ->
     {ok, #state{cap = nova_liveboard:request_buffer(), limits = limits(Limits)}}.
 
+-spec handle_call(term(), gen_server:from(), #state{}) -> {reply, term(), #state{}}.
 handle_call({maybe_arm, ReqId, RootPid}, _From, #state{armed = N} = S) when
     N > 0,
     is_binary(ReqId),
@@ -198,7 +222,7 @@ handle_call({get, ReqId}, _From, S) ->
             false -> undefined
         end,
     {reply, Found, S};
-handle_call({subscribe, Pid}, _From, S) ->
+handle_call({subscribe, Pid}, _From, S) when is_pid(Pid) ->
     Ref = erlang:monitor(process, Pid),
     {reply, ok, S#state{subs = (S#state.subs)#{Ref => Pid}}};
 handle_call(trace_state, _From, S) ->
@@ -210,7 +234,8 @@ handle_call(active, _From, S) ->
 handle_call(_Req, _From, S) ->
     {reply, ok, S}.
 
-handle_cast({finalize, ReqId, Summary}, S) ->
+-spec handle_cast(term(), #state{}) -> {noreply, #state{}}.
+handle_cast({finalize, ReqId, Summary}, S) when is_binary(ReqId), is_map(Summary) ->
     {Tree, S1} = take_trace(ReqId, S),
     Record = Summary#{spawned => length(Tree), spawned_tree => Tree},
     Reqs = lists:sublist([Record | S1#state.requests], S1#state.cap),
@@ -220,16 +245,17 @@ handle_cast({finalize, ReqId, Summary}, S) ->
 handle_cast(clear, S) ->
     notify(S, nova_liveboard_requests_cleared),
     {noreply, S#state{requests = []}};
-handle_cast({start_trace, N}, S) ->
+handle_cast({start_trace, N}, S) when is_integer(N), N > 0 ->
     {noreply, notify_trace_state(S#state{armed = N})};
 handle_cast(stop_trace, S) ->
     {noreply, notify_trace_state(S#state{armed = 0})};
 handle_cast(_Msg, S) ->
     {noreply, S}.
 
+-spec handle_info(term(), #state{}) -> {noreply, #state{}}.
 handle_info({trace, Parent, spawn, Child, MFA}, S) when is_pid(Parent), is_pid(Child) ->
     {noreply, record_spawn(Parent, Child, MFA, S)};
-handle_info({'DOWN', Ref, process, _Pid, _Reason}, S) ->
+handle_info({'DOWN', Ref, process, _Pid, _Reason}, S) when is_reference(Ref) ->
     case S#state.monitors of
         #{Ref := ReqId} -> {noreply, drop_traces([ReqId], S)};
         #{} -> {noreply, S#state{subs = maps:remove(Ref, S#state.subs)}}
@@ -245,6 +271,7 @@ handle_info(_Msg, S) ->
 %% trace bookkeeping
 %% ---------------------------------------------------------------------------
 
+-spec record_spawn(pid(), pid(), term(), #state{}) -> #state{}.
 record_spawn(Parent, Child, MFA, S) ->
     case S#state.pid2req of
         #{Parent := ReqId} when map_size(S#state.pid2req) < map_get(max_pids, S#state.limits) ->
@@ -268,6 +295,7 @@ record_spawn(Parent, Child, MFA, S) ->
             S
     end.
 
+-spec take_trace(binary(), #state{}) -> {[map()], #state{}}.
 take_trace(ReqId, S) ->
     case S#state.traces of
         #{ReqId := #{nodes := Nodes}} -> {lists:reverse(Nodes), drop_traces([ReqId], S)};
@@ -334,13 +362,16 @@ limit(Key, Given) ->
 %% notifications
 %% ---------------------------------------------------------------------------
 
+-spec notify(#state{}, term()) -> ok.
 notify(#state{subs = Subs}, Msg) ->
     maps:foreach(fun(_Ref, Pid) -> Pid ! Msg end, Subs).
 
+-spec notify_trace_state(#state{}) -> #state{}.
 notify_trace_state(S) ->
     notify(S, {nova_liveboard_trace_state, trace_state_map(S)}),
     S.
 
+-spec trace_state_map(#state{}) -> trace_state().
 trace_state_map(#state{armed = N}) ->
     #{armed => N > 0, remaining => N}.
 
@@ -348,11 +379,16 @@ trace_state_map(#state{armed = N}) ->
 %% helpers
 %% ---------------------------------------------------------------------------
 
+-spec pid_bin(pid()) -> binary().
 pid_bin(Pid) -> list_to_binary(pid_to_list(Pid)).
 
+-spec format_mfa(term()) -> binary().
 format_mfa({M, F, Args}) when is_list(Args) ->
     iolist_to_binary(io_lib:format("~s:~s/~b", [M, F, length(Args)]));
 format_mfa({M, F, A}) when is_integer(A) ->
     iolist_to_binary(io_lib:format("~s:~s/~b", [M, F, A]));
 format_mfa(Other) ->
-    unicode:characters_to_binary(io_lib:format("~0tp", [Other], [{chars_limit, 200}])).
+    case unicode:characters_to_binary(io_lib:format("~0tp", [Other], [{chars_limit, 200}])) of
+        Printed when is_binary(Printed) -> Printed;
+        {_, Readable, _Rest} -> Readable
+    end.

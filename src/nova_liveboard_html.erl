@@ -895,17 +895,40 @@ to_bin(A) when is_atom(A) ->
 to_bin(I) when is_integer(I) ->
     integer_to_binary(I);
 to_bin(L) when is_list(L) ->
-    try unicode:characters_to_binary(L) of
-        B when is_binary(B) -> B;
-        _ -> printed(L)
-    catch
-        error:badarg -> printed(L)
+    case text(L, []) of
+        {ok, Text} ->
+            case unicode:characters_to_binary(lists:reverse(Text)) of
+                B when is_binary(B) -> B;
+                _ -> printed(L)
+            end;
+        error ->
+            printed(L)
     end;
 to_bin(T) ->
     printed(T).
 
+%% The characters and binaries of a list that is text, in reverse order.
+-spec text(term(), [char() | binary()]) -> {ok, [char() | binary()]} | error.
+text([], Text) ->
+    {ok, Text};
+text(Binary, Text) when is_binary(Binary) ->
+    {ok, [Binary | Text]};
+text([Character | Rest], Text) when is_integer(Character), Character >= 0 ->
+    text(Rest, [Character | Text]);
+text([Nested | Rest], Text) ->
+    case text(Nested, Text) of
+        {ok, WithNested} -> text(Rest, WithNested);
+        error -> error
+    end;
+text(_, _Text) ->
+    error.
+
+-spec printed(term()) -> binary().
 printed(T) ->
-    unicode:characters_to_binary(io_lib:format("~0tp", [T], [{chars_limit, ?MAX_PRINTED}])).
+    case unicode:characters_to_binary(io_lib:format("~0tp", [T], [{chars_limit, ?MAX_PRINTED}])) of
+        B when is_binary(B) -> B;
+        {_, Readable, _Rest} -> Readable
+    end.
 
 %% ---------------------------------------------------------------------------
 %% security + escaping

@@ -163,11 +163,21 @@ view(_) -> error.
 -spec client(term()) -> {ok, client()} | error.
 client({identity, Digest}) when is_binary(Digest) ->
     {ok, {identity, Digest}};
-client({peer, Address}) when is_tuple(Address) ->
-    case inet:is_ip_address(Address) of
-        true -> {ok, {peer, Address}};
-        false -> error
-    end;
+client({peer, {A, B, C, D}}) when
+    is_integer(A), is_integer(B), is_integer(C), is_integer(D)
+->
+    {ok, {peer, {A, B, C, D}}};
+client({peer, {A, B, C, D, E, F, G, H}}) when
+    is_integer(A),
+    is_integer(B),
+    is_integer(C),
+    is_integer(D),
+    is_integer(E),
+    is_integer(F),
+    is_integer(G),
+    is_integer(H)
+->
+    {ok, {peer, {A, B, C, D, E, F, G, H}}};
 client(_) ->
     error.
 

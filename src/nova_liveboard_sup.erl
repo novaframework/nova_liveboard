@@ -7,7 +7,7 @@ streams. The poller subscribes to the tracer, so it is restarted with it.
 
 -export([start_link/0, init/1]).
 
--spec start_link() -> {ok, pid()}.
+-spec start_link() -> supervisor:startlink_ret().
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 

@@ -112,4 +112,9 @@ capped(Value) -> Value.
 
 -spec printed(term()) -> binary().
 printed(Term) ->
-    unicode:characters_to_binary(io_lib:format("~0tp", [Term], [{chars_limit, ?MAX_PRINTED}])).
+    case
+        unicode:characters_to_binary(io_lib:format("~0tp", [Term], [{chars_limit, ?MAX_PRINTED}]))
+    of
+        Printed when is_binary(Printed) -> Printed;
+        {_, Readable, _Rest} -> Readable
+    end.
