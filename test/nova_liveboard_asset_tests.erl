@@ -4,18 +4,19 @@
 -define(SERVER, nova_liveboard_test_server).
 
 asset_test_() ->
-    {setup, fun() -> ?SERVER:start([{prefix, ~"/liveboard"}]) end, fun ?SERVER:stop/1, fun(Server) ->
-        [
-            {"serves the stylesheet", fun() -> serves_stylesheet(Server) end},
-            {"serves the datastar bundle", fun() -> serves_script(Server) end},
-            {"serves the fonts", fun() -> serves_fonts(Server) end},
-            {"only GET is routed", fun() -> only_get(Server) end},
+    {setup, fun() -> ?SERVER:start([{prefix, ~"/liveboard"}, {auth, none}]) end, fun ?SERVER:stop/1,
+        fun(Server) ->
             [
-                {binary_to_list(Path), fun() -> escapes_are_not_found(Server, Path) end}
-             || Path <- escape_attempts()
+                {"serves the stylesheet", fun() -> serves_stylesheet(Server) end},
+                {"serves the datastar bundle", fun() -> serves_script(Server) end},
+                {"serves the fonts", fun() -> serves_fonts(Server) end},
+                {"only GET is routed", fun() -> only_get(Server) end},
+                [
+                    {binary_to_list(Path), fun() -> escapes_are_not_found(Server, Path) end}
+                 || Path <- escape_attempts()
+                ]
             ]
-        ]
-    end}.
+        end}.
 
 serves_stylesheet(Server) ->
     Response = ?SERVER:request(Server, ~"GET /liveboard/assets/css/app.css HTTP/1.1"),

@@ -1,6 +1,8 @@
 -module(nova_liveboard_router).
 -behaviour(nova_router).
 
+-include_lib("kernel/include/logger.hrl").
+
 -export([routes/1]).
 
 %% All pages, the per-region SSE streams, the request-trace actions and the
@@ -12,7 +14,7 @@ routes(_Env) ->
     [
         #{
             prefix => binary_to_list(nova_liveboard:prefix()),
-            security => false,
+            security => security(),
             routes => [
                 {"/", fun nova_liveboard_page_controller:index/1, #{methods => [get]}},
                 {"/processes", fun nova_liveboard_page_controller:processes/1, #{methods => [get]}},
@@ -54,3 +56,25 @@ routes(_Env) ->
             ]
         }
     ].
+
+%% The liveboard shows the node's processes, tables, ports and request
+%% traffic, so it never mounts without the host having decided who may reach
+%% it.
+security() ->
+    case nova_liveboard:auth() of
+        {ok, none} ->
+            ?LOG_WARNING(#{
+                msg => ~"nova_liveboard_mounted_without_auth",
+                prefix => nova_liveboard:prefix()
+            }),
+            false;
+        {ok, {Module, Function}} ->
+            fun Module:Function/1;
+        {error, Reason} ->
+            ?LOG_ERROR(#{
+                msg => ~"nova_liveboard_refusing_to_mount",
+                reason => Reason,
+                fix => ~"set {auth, {Module, Function}} or {auth, none} in the nova_liveboard env"
+            }),
+            error({nova_liveboard_refusing_to_mount, Reason})
+    end.

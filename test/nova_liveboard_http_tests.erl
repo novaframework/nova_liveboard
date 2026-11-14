@@ -4,7 +4,7 @@
 -define(SERVER, nova_liveboard_test_server).
 
 http_test_() ->
-    {setup, fun() -> ?SERVER:start([{prefix, ~"/liveboard"}, {refresh_ms, 50}]) end,
+    {setup, fun() -> ?SERVER:start([{prefix, ~"/liveboard"}, {auth, none}, {refresh_ms, 50}]) end,
         fun ?SERVER:stop/1, fun(Server) ->
             [
                 {"pages render under the prefix", fun() -> pages_render(Server) end},
