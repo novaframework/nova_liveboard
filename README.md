@@ -336,4 +336,5 @@ not resolve `.` and `..` in a request path before matching it.
 
 ## Licence
 
-Apache-2.0.
+Apache-2.0, see [LICENSE](LICENSE). The bundled fonts have their own licence
+in `priv/static/assets/fonts/NOTICE`.
