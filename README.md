@@ -97,7 +97,7 @@ pgo pools are not read any more: Kura has no pgo backend.
 | `max_streams` | `50` | a non-negative integer | live streams open at once, over all viewers. Each open page uses two. Further streams get `503`; the page still renders, it just does not update |
 | `max_streams_per_client` | `6` | a non-negative integer | how many of those streams one viewer may hold, three open pages by default. Further streams get `429`. See [Live streams](#live-streams) for what counts as one viewer |
 | `stream_lifetime_ms` | `300000` | a positive integer | how long one live stream stays open before the browser reconnects and is authenticated again |
-| `redact` | `standard` | `standard`, `none`, `all` or `{Module, Function}` with `Module:Function/2` exported | what of request paths, port names and child ids is masked, see [Redaction](#redaction) |
+| `redact` | `standard` | `standard`, `none`, `all` or `{Module, Function}` with `Module:Function/2` exported | what of request paths, port names, child ids and database names and hosts is masked, see [Redaction](#redaction) |
 | `trusted_origins` | `[]` | a list of binaries, each a scheme and a host such as `~"https://ops.example.com"` | extra origins accepted for actions, see [Actions and CSRF](#actions-and-csrf) |
 
 The settings are checked when Nova builds the liveboard's routes and again
@@ -239,23 +239,27 @@ rewrites `Host`, list the public origin:
 
 ### Redaction
 
-Three of the values shown can carry a secret: the path of a traced request (a
+Five of the values shown can carry a secret: the path of a traced request (a
 reset token, an API key, a signed link), the name of a port (for a spawned
-program its whole command line) and a supervisor child id that is not an atom
-(printed as a term, often built from a connection configuration). `redact`
-decides what is masked:
+program its whole command line), a supervisor child id that is not an atom
+(printed as a term, often built from a connection configuration), and the
+database name and host of a Kura repo (a URL with a user and password in it).
+`redact` decides what is masked:
 
 - `standard` (the default) - a path segment of 20 or more bytes that contains
   a digit is shown as `[redacted]`, so `/reset/9f86d081884c7d659a2feaa0c55ad015`
   becomes `/reset/[redacted]`; a port name is cut after the program, so
   `psql postgres://app:secret@db/prod` becomes `psql [redacted]`; a child id is
-  printed, capped at 200 characters.
-- `none` - the three are shown as they are, capped in length.
-- `all` - each of the three is shown as `[redacted]`.
+  printed, capped at 200 characters; in a database name or host, what stands
+  before an `@` and what follows a `?` is masked, so
+  `postgres://app:secret@db/prod` becomes `postgres://[redacted]@db/prod`.
+- `none` - the five are shown as they are, capped in length.
+- `all` - each of the five is shown as `[redacted]`.
 - `{Module, Function}` - `Module:Function(Kind, Value)` is called with
-  `request_path`, `port_name` or `child_id` and the value as a binary, and
-  returns the binary to show. If it returns anything else or fails, the value
-  is shown as `[redacted]`.
+  `request_path`, `port_name`, `child_id`, `database` or `database_host` and
+  the value as a binary, and returns the binary to show. If it returns
+  anything else or fails, the value is shown as `[redacted]`, so a callback
+  without a clause for the two database kinds hides them.
 
 ```erlang
 -module(your_app_liveboard_redact).
@@ -271,7 +275,10 @@ shown(_Kind, Value) -> Value.
 ```
 
 A path is redacted when the request is captured, so the tracer never holds the
-original, and the query string is never captured at all.
+original, and the query string is never captured at all. Of a repo's
+connection configuration only the database, host, port and pool size are read
+for display: the user, the password and every other setting never reach the
+page or a log, whatever `redact` is.
 
 The `standard` rule is a guess at what a token looks like. A short secret in a
 path is shown, so use `all` or a callback when the default is not enough.

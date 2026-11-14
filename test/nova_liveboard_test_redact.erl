@@ -8,12 +8,13 @@ atom child id and one child id built from a connection string.
 -export([shown/2, broken/2]).
 -export([init/1, idle/0]).
 
--type kind() :: request_path | port_name | child_id.
+-type kind() :: nova_liveboard_redact:kind().
 
 -spec shown(kind(), binary()) -> binary().
 shown(request_path, <<"/files/", _/binary>>) -> ~"/files/:name";
 shown(port_name, _Name) -> ~"a port";
 shown(child_id, Id) -> <<"child ", Id/binary>>;
+shown(database_host, _Host) -> ~"a host";
 shown(_Kind, Value) -> Value.
 
 -spec broken(kind(), binary()) -> not_a_binary.

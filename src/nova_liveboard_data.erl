@@ -520,7 +520,7 @@ with_settings(Settings, Repo) ->
 -spec with_database(map(), repo()) -> repo().
 with_database(#{database := Database}, Repo) ->
     case setting_text(Database) of
-        {ok, Text} -> Repo#{database => Text};
+        {ok, Text} -> Repo#{database => nova_liveboard_redact:database(Text)};
         error -> Repo
     end;
 with_database(_Settings, Repo) ->
@@ -530,7 +530,7 @@ with_database(_Settings, Repo) ->
 -spec with_host(map(), repo()) -> repo().
 with_host(Settings, Repo) ->
     case setting_text(maps:get(host, Settings, maps:get(hostname, Settings, undefined))) of
-        {ok, Text} -> Repo#{host => Text};
+        {ok, Text} -> Repo#{host => nova_liveboard_redact:database_host(Text)};
         error -> Repo
     end.
 

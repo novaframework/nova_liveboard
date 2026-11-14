@@ -12,6 +12,8 @@ redact_test_() ->
         fun standard_keeps_ordinary_paths/0,
         fun standard_cuts_a_port_name_after_the_program/0,
         fun standard_prints_child_ids_bounded/0,
+        fun standard_masks_credentials_in_a_database_name_and_host/0,
+        fun standard_keeps_ordinary_database_names_and_hosts/0,
         fun none_shows_everything_bounded/0,
         fun all_hides_everything/0,
         fun callback_decides/0,
@@ -61,27 +63,75 @@ standard_prints_child_ids_bounded() ->
     ?assertEqual(~"{pool,<<\"main\">>}", ?M:child_id({pool, ~"main"})),
     ?assert(byte_size(?M:child_id({pool, lists:duplicate(5000, $a)})) =< 250).
 
+standard_masks_credentials_in_a_database_name_and_host() ->
+    [
+        begin
+            ?assertEqual(Shown, ?M:database(Value)),
+            ?assertEqual(Shown, ?M:database_host(Value))
+        end
+     || {Value, Shown} <- [
+            {~"postgres://app:hunter2@db.internal/prod", ~"postgres://[redacted]@db.internal/prod"},
+            {~"app:hunter2@db.internal", ~"[redacted]@db.internal"},
+            {~"postgres://app:hun@ter2@db.internal", ~"postgres://[redacted]@db.internal"},
+            {~"file:files.db?key=hunter2", ~"file:files.db?[redacted]"},
+            {
+                ~"postgres://app:hunter2@db.internal/prod?sslpassword=hunter2&as=a@b",
+                ~"postgres://[redacted]@db.internal/prod?[redacted]"
+            },
+            {~"hunter2@db://prod", ~"[redacted]@db://prod"},
+            {~"hunter2@", ~"[redacted]@"},
+            {~"?hunter2", ~"?[redacted]"}
+        ]
+    ],
+    ?assertEqual(515, byte_size(?M:database(binary:copy(~"a", 9000)))).
+
+standard_keeps_ordinary_database_names_and_hosts() ->
+    [
+        begin
+            ?assertEqual(Value, ?M:database(Value)),
+            ?assertEqual(Value, ?M:database_host(Value))
+        end
+     || Value <- [
+            ~"shop",
+            ~"priv/files.db",
+            ~":memory:",
+            ~"/var/lib/My App/files.db",
+            ~"db.internal",
+            ~"10.0.0.7",
+            ~"::1",
+            ~""
+        ]
+    ].
+
 none_shows_everything_bounded() ->
     application:set_env(nova_liveboard, redact, none),
     Path = <<"/reset/", ?HEX/binary>>,
     ?assertEqual(Path, ?M:request_path(Path)),
     ?assertEqual(~"psql -h db", ?M:port_name(~"psql -h db")),
+    ?assertEqual(~"app:hunter2@db.internal", ?M:database(~"app:hunter2@db.internal")),
+    ?assertEqual(~"app:hunter2@db.internal", ?M:database_host(~"app:hunter2@db.internal")),
     Long = binary:copy(~"a", 9000),
     ?assertEqual(515, byte_size(?M:request_path(Long))),
-    ?assertEqual(515, byte_size(?M:port_name(Long))).
+    ?assertEqual(515, byte_size(?M:port_name(Long))),
+    ?assertEqual(515, byte_size(?M:database(Long))),
+    ?assertEqual(515, byte_size(?M:database_host(Long))).
 
 all_hides_everything() ->
     application:set_env(nova_liveboard, redact, all),
     ?assertEqual(~"[redacted]", ?M:request_path(~"/api/widgets")),
     ?assertEqual(~"[redacted]", ?M:port_name(~"tcp_inet")),
-    ?assertEqual(~"[redacted]", ?M:child_id({pool, main})).
+    ?assertEqual(~"[redacted]", ?M:child_id({pool, main})),
+    ?assertEqual(~"[redacted]", ?M:database(~"shop")),
+    ?assertEqual(~"[redacted]", ?M:database_host(~"db.internal")).
 
 callback_decides() ->
     application:set_env(nova_liveboard, redact, {nova_liveboard_test_redact, shown}),
     ?assertEqual(~"/files/:name", ?M:request_path(~"/files/report.pdf")),
     ?assertEqual(<<"/reset/", ?HEX/binary>>, ?M:request_path(<<"/reset/", ?HEX/binary>>)),
     ?assertEqual(~"a port", ?M:port_name(~"psql -h db")),
-    ?assertEqual(~"child {pool,main}", ?M:child_id({pool, main})).
+    ?assertEqual(~"child {pool,main}", ?M:child_id({pool, main})),
+    ?assertEqual(~"shop", ?M:database(~"shop")),
+    ?assertEqual(~"a host", ?M:database_host(~"db.internal")).
 
 failing_callback_hides_the_value() ->
     [
@@ -89,7 +139,9 @@ failing_callback_hides_the_value() ->
             application:set_env(nova_liveboard, redact, Callback),
             ?assertEqual(~"[redacted]", ?M:request_path(~"/api/widgets")),
             ?assertEqual(~"[redacted]", ?M:port_name(~"tcp_inet")),
-            ?assertEqual(~"[redacted]", ?M:child_id({pool, main}))
+            ?assertEqual(~"[redacted]", ?M:child_id({pool, main})),
+            ?assertEqual(~"[redacted]", ?M:database(~"shop")),
+            ?assertEqual(~"[redacted]", ?M:database_host(~"db.internal"))
         end
      || Callback <- [
             {nova_liveboard_test_redact, broken},
