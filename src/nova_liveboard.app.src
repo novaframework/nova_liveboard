@@ -1,7 +1,7 @@
 {application, nova_liveboard, [
     {description, "Real-time BEAM VM dashboard for Nova (Nova + Datastar)"},
     {vsn, git},
-    {registered, [nova_liveboard_tracer]},
+    {registered, [nova_liveboard_sup, nova_liveboard_tracer, nova_liveboard_poller]},
     {mod, {nova_liveboard_app, []}},
     {applications, [
         kernel,
@@ -12,7 +12,11 @@
     {env, [
         {prefix, "/liveboard"},
         {refresh_ms, 2000},
-        {request_buffer, 200}
+        {request_buffer, 200},
+        {max_streams, 50},
+        {stream_lifetime_ms, 300000},
+        {redact, standard},
+        {trusted_origins, []}
     ]},
     {modules, []},
     {licenses, ["Apache-2.0"]},
