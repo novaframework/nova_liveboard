@@ -1,7 +1,7 @@
 -module(nova_liveboard_test_auth).
 -moduledoc "The HTTP basic auth callback from the README, used as the test fixture.".
 
--export([operators_only/1, not_a_callback/0]).
+-export([operators_only/1, identified/1, not_a_callback/0]).
 
 operators_only(Req) ->
     case
@@ -14,6 +14,13 @@ operators_only(Req) ->
             same(Given, Expected) orelse challenge();
         _ ->
             challenge()
+    end.
+
+%% Lets everyone in and names those who say who they are.
+identified(Req) ->
+    case cowboy_req:header(~"x-test-user", Req) of
+        undefined -> true;
+        User -> {true, #{user => User}}
     end.
 
 not_a_callback() ->

@@ -74,6 +74,7 @@ spawned - overhead is only paid while armed.
 | `refresh_ms` | `2000` | a positive integer | repaint interval for polled streams |
 | `request_buffer` | `200` | a positive integer | recent requests retained |
 | `max_streams` | `50` | a non-negative integer | live streams open at once, over all viewers. Each open page uses two. Further streams get `503`; the page still renders, it just does not update |
+| `max_streams_per_client` | `6` | a non-negative integer | how many of those streams one viewer may hold, three open pages by default. Further streams get `429`. See [Live streams](#live-streams) for what counts as one viewer |
 | `stream_lifetime_ms` | `300000` | a positive integer | how long one live stream stays open before the browser reconnects and is authenticated again |
 | `redact` | `standard` | `standard`, `none`, `all` or `{Module, Function}` with `Module:Function/2` exported | what of request paths, port names and child ids is masked, see [Redaction](#redaction) |
 | `trusted_origins` | `[]` | a list of binaries, each a scheme and a host such as `~"https://ops.example.com"` | extra origins accepted for actions, see [Actions and CSRF](#actions-and-csrf) |
@@ -263,9 +264,27 @@ view is repainted at most five times a second, however busy the node is. No
 more than `max_streams` streams are open at once and each one ends after
 `stream_lifetime_ms`; the browser reconnects by itself.
 
-The limit is shared by all viewers: there is no per-viewer quota, so with
-`auth` set to `none` anyone who can reach the listener can use up the streams.
-Pages still render when they are used up.
+One viewer holds at most `max_streams_per_client` of them, so a single browser
+with many tabs, or a single script, cannot take every stream and leave the
+other viewers with pages that do not update. A stream beyond the viewer's
+share is answered `429` and one beyond `max_streams` is answered `503`, both
+with `retry-after`; the page itself still renders.
+
+Who counts as one viewer:
+
+- When the `auth` callback returns `{true, AuthData}`, the viewer is
+  `AuthData`, wherever the requests come from. Return something that is the
+  same on every request of one viewer, such as a user id, and not something
+  that changes between requests. The liveboard keeps only a SHA-256 digest of
+  it.
+- When the callback returns `true`, or `auth` is `none`, the viewer is the
+  address the connection comes from; an IPv6 address counts by its /64.
+  Behind a reverse proxy that is the address of the proxy, so every viewer
+  shares one allowance: have the callback return an identity, or raise
+  `max_streams_per_client`.
+
+With `auth` set to `none` anyone who can reach the listener can still use up
+`max_streams` from several addresses.
 
 ### Browser policy
 

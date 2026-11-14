@@ -4,8 +4,9 @@ The liveboard's live transport: one SSE stream per page region.
 
 `stream/1` is a normal Nova controller returning `{stream, Code, Headers,
 Source}`. That tuple is picked up by a return-handler we register
-(`handle_stream/3`). It answers 404 for a page that has no live region and 503
-when `max_streams` streams are already open; otherwise it subscribes to
+(`handle_stream/3`). It answers 404 for a page that has no live region, 503
+when `max_streams` streams are already open and 429 when the client that asks
+already has `max_streams_per_client` of them; otherwise it subscribes to
 `m:nova_liveboard_poller`, `stream_reply`s the SSE headers and then **holds
 the connection**, forwarding the frames the poller sends. It never returns, so
 Nova's buffered `render_response` (which would reply again and crash) never
@@ -27,7 +28,7 @@ The handler is registered as an explicit `fun/3` because current Nova invokes
 return-handlers with 3 args, while its `{Mod, Fun}` form wraps to arity 4.
 """.
 
--export([register/0, stream/1, handle_stream/3]).
+-export([register/0, stream/1, handle_stream/3, client/1]).
 
 -define(PAGES, #{
     ~"vitals" => vitals,
@@ -55,17 +56,42 @@ stream(Req) ->
 handle_stream({stream, Code, Headers, {Name, Qs}}, Callback, Req) ->
     case view(Name, Qs) of
         {ok, View} ->
-            case nova_liveboard_poller:subscribe(View) of
+            case nova_liveboard_poller:subscribe(View, client(Req)) of
                 {ok, Poller} ->
                     hold_open(Code, Headers, Poller, Req);
+                {error, too_many_streams_for_client} ->
+                    refuse(429, Callback, Req);
                 {error, _} ->
-                    nova_basic_handler:handle_status(
-                        {status, 503, #{~"retry-after" => ~"5"}}, Callback, Req
-                    )
+                    refuse(503, Callback, Req)
             end;
         error ->
             nova_basic_handler:handle_status({status, 404}, Callback, Req)
     end.
+
+refuse(Status, Callback, Req) ->
+    nova_basic_handler:handle_status({status, Status, #{~"retry-after" => ~"5"}}, Callback, Req).
+
+-doc """
+Who a stream is opened by, for the per-client limit.
+
+When the host's `auth` callback returned `{true, AuthData}`, Nova has put
+`AuthData` on the request and the client is that identity, wherever its
+requests come from. Only a digest of it is kept. Two requests belong to the
+same viewer when their `AuthData` is equal, so a callback should return
+something stable for a viewer (a user id, a role and a name), not something
+that differs from request to request.
+
+Otherwise the client is the address the connection comes from, an IPv6
+address counting by its /64. Behind a reverse proxy that is the proxy, so all
+viewers share one limit unless the callback returns an identity.
+""".
+-spec client(cowboy_req:req()) -> nova_liveboard_poller:client().
+client(#{auth_data := AuthData}) ->
+    {identity, crypto:hash(sha256, term_to_binary(AuthData, [deterministic]))};
+client(#{peer := {{A, B, C, D, _, _, _, _}, _Port}}) ->
+    {peer, {A, B, C, D, 0, 0, 0, 0}};
+client(#{peer := {Address, _Port}}) ->
+    {peer, Address}.
 
 -spec view(term(), [{binary(), binary() | true}]) -> {ok, nova_liveboard_poller:view()} | error.
 view(~"processes", Qs) ->

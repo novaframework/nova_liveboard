@@ -11,6 +11,7 @@ All settings live under the `nova_liveboard` application env:
 | `refresh_ms` | `2000` | a positive integer |
 | `request_buffer` | `200` | a positive integer |
 | `max_streams` | `50` | a non-negative integer |
+| `max_streams_per_client` | `6` | a non-negative integer |
 | `stream_lifetime_ms` | `300000` | a positive integer |
 | `redact` | `standard` | `standard`, `none`, `all` or `{Module, Function}`, see `m:nova_liveboard_redact` |
 | `trusted_origins` | `[]` | a list of origins as binaries, see `trusted_origins/0` |
@@ -31,6 +32,7 @@ with the default, or for `redact` with `all`.
     refresh_ms/0,
     request_buffer/0,
     max_streams/0,
+    max_streams_per_client/0,
     stream_lifetime_ms/0,
     auth/0,
     trusted_origins/0,
@@ -40,7 +42,14 @@ with the default, or for `redact` with `all`.
 -define(PREFIX, ~"/liveboard").
 -define(REQUEST_BUFFER, 200).
 -define(VALIDATED, [
-    prefix, refresh_ms, request_buffer, max_streams, stream_lifetime_ms, redact, trusted_origins
+    prefix,
+    refresh_ms,
+    request_buffer,
+    max_streams,
+    max_streams_per_client,
+    stream_lifetime_ms,
+    redact,
+    trusted_origins
 ]).
 
 -type auth() :: none | {module(), atom()}.
@@ -90,6 +99,17 @@ max_streams() ->
     case application:get_env(nova_liveboard, max_streams, 50) of
         N when is_integer(N), N >= 0 -> N;
         _ -> 50
+    end.
+
+-doc """
+How many of the open live streams one client may hold. Default 6, which is
+three open pages. See `nova_liveboard_sse:client/1` for what a client is.
+""".
+-spec max_streams_per_client() -> non_neg_integer().
+max_streams_per_client() ->
+    case application:get_env(nova_liveboard, max_streams_per_client, 6) of
+        N when is_integer(N), N >= 0 -> N;
+        _ -> 6
     end.
 
 -doc "How long one live stream may stay open before the browser must reconnect. Default 5 minutes.".
@@ -178,7 +198,7 @@ valid(Key) ->
 -spec valid(atom(), term()) -> boolean().
 valid(prefix, Value) ->
     mount_path(Value);
-valid(max_streams, Value) ->
+valid(Limit, Value) when Limit =:= max_streams; Limit =:= max_streams_per_client ->
     is_integer(Value) andalso Value >= 0;
 valid(redact, {Module, Function}) when is_atom(Module), is_atom(Function) ->
     code:ensure_loaded(Module) =:= {module, Module} andalso
@@ -193,7 +213,7 @@ valid(_PositiveInteger, Value) ->
 -spec accepted(atom()) -> binary().
 accepted(prefix) ->
     ~"a string or binary that is empty or starts with \"/\" and does not end with \"/\"";
-accepted(max_streams) ->
+accepted(Limit) when Limit =:= max_streams; Limit =:= max_streams_per_client ->
     ~"a non-negative integer";
 accepted(redact) ->
     ~"standard, none, all or {Module, Function} where Module:Function/2 is exported";

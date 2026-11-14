@@ -8,6 +8,7 @@ the_env_block_states_every_default_test() ->
     ?assertEqual(
         [
             max_streams,
+            max_streams_per_client,
             prefix,
             redact,
             refresh_ms,

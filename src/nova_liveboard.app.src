@@ -14,6 +14,7 @@
         {refresh_ms, 2000},
         {request_buffer, 200},
         {max_streams, 50},
+        {max_streams_per_client, 6},
         {stream_lifetime_ms, 300000},
         {redact, standard},
         {trusted_origins, []}

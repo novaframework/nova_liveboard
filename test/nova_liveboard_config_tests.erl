@@ -4,7 +4,14 @@
 -export([log/2]).
 
 -define(KEYS, [
-    prefix, refresh_ms, request_buffer, max_streams, stream_lifetime_ms, redact, trusted_origins
+    prefix,
+    refresh_ms,
+    request_buffer,
+    max_streams,
+    max_streams_per_client,
+    stream_lifetime_ms,
+    redact,
+    trusted_origins
 ]).
 -define(SECRET, ~"correct horse battery staple").
 
@@ -43,6 +50,7 @@ accepted_values_pass() ->
             {refresh_ms, [1, 2000]},
             {request_buffer, [1, 200, 100000]},
             {max_streams, [0, 1, 50]},
+            {max_streams_per_client, [0, 1, 6, 50]},
             {stream_lifetime_ms, [1, 300000]},
             {redact, [standard, none, all, {nova_liveboard_test_redact, shown}]},
             {trusted_origins, [
@@ -81,6 +89,7 @@ other_values_are_named() ->
             {refresh_ms, [0, -1, 1.5, infinity, ~"2000", "2000", undefined]},
             {request_buffer, [0, -1, 1.5, infinity, ~"200", "200", undefined, nope]},
             {max_streams, [-1, 1.5, infinity, ~"50", undefined]},
+            {max_streams_per_client, [-1, 1.5, infinity, ~"6", undefined]},
             {stream_lifetime_ms, [0, -1, 1.5, infinity, ~"300000", undefined]},
             {redact, [
                 true,
@@ -121,6 +130,7 @@ the_failure_never_carries_the_value() ->
         {refresh_ms, ?SECRET},
         {request_buffer, ?SECRET},
         {max_streams, ?SECRET},
+        {max_streams_per_client, ?SECRET},
         {stream_lifetime_ms, ?SECRET},
         {redact, {basic, ?SECRET}},
         {trusted_origins, [<<"https://operator:", ?SECRET/binary, "@ops.example.com/">>]}
