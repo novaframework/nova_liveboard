@@ -101,6 +101,32 @@ every_bundled_file_has_a_route_test() ->
     Bundled = filelib:wildcard("static/assets/**/*.{css,js,woff2}", code:priv_dir(nova_liveboard)),
     ?assertEqual(6, length(Bundled)).
 
+the_font_notice_describes_the_bundled_fonts_test() ->
+    _ = application:load(nova_liveboard),
+    Fonts = filename:join([code:priv_dir(nova_liveboard), "static", "assets", "fonts"]),
+    {ok, Notice} = file:read_file(filename:join(Fonts, "NOTICE")),
+    Bundled = [unicode:characters_to_binary(Name) || Name <- filelib:wildcard("*.woff2", Fonts)],
+    {match, Named} = re:run(Notice, ~"[a-z0-9-]+\\.woff2", [global, {capture, first, binary}]),
+    ?assertEqual(lists:sort(Bundled), lists:sort(lists:append(Named))),
+    ?assertEqual(4, length(Bundled)),
+    ?assertEqual(lists:sort(Bundled), lists:sort(fonts())),
+    [
+        ?assertNotEqual({Stated, nomatch}, {Stated, binary:match(Notice, Stated)})
+     || Stated <- [
+            ~"nova_liveboard",
+            ~"IBM Plex Mono",
+            ~"Copyright © 2017 IBM Corp. with Reserved Font Name \"Plex\"",
+            ~"SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007",
+            ~"PERMISSION & CONDITIONS",
+            ~"TERMINATION",
+            ~"DISCLAIMER"
+        ]
+    ],
+    [
+        ?assertEqual({Absent, nomatch}, {Absent, binary:match(Notice, Absent)})
+     || Absent <- [~"gakudan", ~"Instrument", ~"fetch-fonts", ~"make fonts"]
+    ].
+
 font_names_are_a_closed_set_test_() ->
     [
         ?_assertEqual(
