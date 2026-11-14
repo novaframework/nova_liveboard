@@ -450,52 +450,19 @@ try_named_sup(AppName) ->
         error:badarg -> undefined
     end.
 
+%% The application master is asked for the supervisor it started. Looking
+%% for it among the linked processes means calling `which_children` on
+%% processes that are not supervisors and never answer.
 find_sup_via_master(AppName) ->
-    try application_controller:get_master(AppName) of
-        MasterPid when is_pid(MasterPid) ->
-            %% application_master links to: application_controller + a starter process
-            %% The starter process links to the top supervisor
-            case erlang:process_info(MasterPid, links) of
-                {links, Links} ->
-                    find_sup_in_master_links(Links);
-                _ ->
-                    undefined
+    case application_controller:get_master(AppName) of
+        Master when is_pid(Master) ->
+            case application_master:get_child(Master) of
+                {Supervisor, _Module} when is_pid(Supervisor) -> Supervisor;
+                _ -> undefined
             end;
         _ ->
             undefined
-    catch
-        _:_ -> undefined
     end.
-
-find_sup_in_master_links([]) ->
-    undefined;
-find_sup_in_master_links([Pid | Rest]) when is_pid(Pid) ->
-    %% Skip the application_controller itself
-    case Pid =:= whereis(application_controller) of
-        true ->
-            find_sup_in_master_links(Rest);
-        false ->
-            %% This is the starter process; its child is the top supervisor
-            case erlang:process_info(Pid, links) of
-                {links, ChildLinks} ->
-                    find_first_supervisor(ChildLinks);
-                _ ->
-                    find_sup_in_master_links(Rest)
-            end
-    end;
-find_sup_in_master_links([_ | Rest]) ->
-    find_sup_in_master_links(Rest).
-
-find_first_supervisor([]) ->
-    undefined;
-find_first_supervisor([Pid | Rest]) when is_pid(Pid) ->
-    try supervisor:which_children(Pid) of
-        _ -> Pid
-    catch
-        _:_ -> find_first_supervisor(Rest)
-    end;
-find_first_supervisor([_ | Rest]) ->
-    find_first_supervisor(Rest).
 
 build_tree(Pid) ->
     try supervisor:which_children(Pid) of

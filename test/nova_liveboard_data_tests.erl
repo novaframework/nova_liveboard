@@ -62,3 +62,24 @@ collect_metrics_accumulates_test() ->
     S1 = nova_liveboard_data:collect_metrics(S0),
     ?assertEqual(2, queue:len(maps:get(total_memory, S1))),
     ?assert(is_list(maps:get(scheduler_util, S1))).
+
+%% The application master and the process that starts the application are
+%% not supervisors and never answer `which_children`.
+unnamed_top_supervisor_test_() ->
+    {setup,
+        fun() ->
+            ok = nova_liveboard_test_unnamed_app:load(),
+            ok = application:start(nova_liveboard_test_unnamed)
+        end,
+        fun(_) ->
+            ok = application:stop(nova_liveboard_test_unnamed),
+            ok = application:unload(nova_liveboard_test_unnamed)
+        end,
+        [
+            {timeout, 5, fun() ->
+                {ok, Tree} = nova_liveboard_data:supervision_tree(nova_liveboard_test_unnamed),
+                ?assertEqual(2, length(Tree)),
+                ?assertEqual([~"plain"], [Name || #{name := Name} <- Tree, Name =:= ~"plain"]),
+                ?assertEqual([worker, worker], [Type || #{type := Type} <- Tree])
+            end}
+        ]}.
