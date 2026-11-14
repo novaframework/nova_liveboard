@@ -27,7 +27,7 @@ escape_blocks_injection_test() ->
 csp_headers_test() ->
     H = nova_liveboard_html:csp_headers(),
     Csp = maps:get(~"content-security-policy", H),
-    ?assert(contains(Csp, ~"default-src 'self'")),
+    ?assert(contains(Csp, ~"default-src 'none'")),
     ?assert(contains(Csp, ~"frame-ancestors 'none'")),
     ?assertEqual(~"text/html; charset=utf-8", maps:get(~"content-type", H)).
 

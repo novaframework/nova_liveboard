@@ -64,7 +64,12 @@ processes(Req) ->
 
 supervisors(Req) ->
     App = app_qs(Req),
-    Stream = <<(stream_path(supervisors))/binary, "?app=", (atom_to_binary(App))/binary>>,
+    Stream =
+        <<
+            (stream_path(supervisors))/binary,
+            "?app=",
+            (nova_liveboard_html:uri_encode(atom_to_binary(App)))/binary
+        >>,
     full(supervisors, Stream, page_inner(supervisors, App)).
 
 request_show(Req) ->

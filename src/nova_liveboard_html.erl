@@ -12,6 +12,25 @@ main stage). The per-region functions (`vitals_html/1`, `overview_html/1`,
 `processes_html/2`, ...) render the *inner* of a live region; the page
 controller uses them for the first paint and `nova_liveboard_sse` re-emits
 them as Datastar patches as the VM changes.
+
+## Output safety
+
+Some of what is rendered is chosen by whoever sends requests to the node (the
+method and path of a traced request) and the rest comes from the running
+system (names, child ids, kura config), so three rules hold for everything
+rendered here:
+
+- Every dynamic value is escaped where it is written out (`html_escape/1`),
+  whatever its type. A carriage return is written as a character reference, so
+  a value can never end a line of the SSE frame that carries it.
+- No dynamic value is ever part of a Datastar expression. Datastar evaluates
+  `data-on:*` and `data-init` values as JavaScript after the HTML parser has
+  undone the escaping, so escaping cannot protect them. Expressions are
+  constants that read what they need from plain `data-liveboard-*` attributes
+  (`el.dataset`), and URLs placed there have their dynamic segments
+  percent-encoded.
+- No inline styles. Bar widths and tree depths are classes, so the
+  Content-Security-Policy in `csp_headers/0` can refuse every inline style.
 """.
 
 -export([
@@ -31,8 +50,14 @@ them as Datastar patches as the VM changes.
     database_html/1,
     schemas_html/1,
     csp_headers/0,
-    html_escape/1
+    html_escape/1,
+    uri_encode/1
 ]).
+
+-define(OPEN_STREAM, ~"@get(el.dataset.liveboardStream)").
+-define(POST_ACTION, ~"@post(el.dataset.liveboardAction)").
+-define(MAX_DEPTH, 16).
+-define(MAX_PRINTED, 200).
 
 -define(NAV, [
     {overview, ~"Overview", ~"\x{25C8}"},
@@ -58,7 +83,7 @@ not be overwritten by a stream.
 """.
 -spec page(atom(), binary() | none, iodata(), iodata()) -> iodata().
 page(Active, StreamPath, VitalsInner, MainInner) ->
-    P = nova_liveboard:prefix(),
+    P = html_escape(nova_liveboard:prefix()),
     [
         ~"<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">",
         ~"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">",
@@ -83,9 +108,11 @@ stage_inner(none, MainInner) ->
     [~"<div id=\"page\" class=\"page\">", MainInner, ~"</div>"];
 stage_inner(StreamPath, MainInner) ->
     [
-        ~"<div data-init=\"@get('",
-        StreamPath,
-        ~"')\"><div id=\"page\" class=\"page\">",
+        ~"<div data-liveboard-stream=\"",
+        html_escape(StreamPath),
+        ~"\" data-init=\"",
+        ?OPEN_STREAM,
+        ~"\"><div id=\"page\" class=\"page\">",
         MainInner,
         ~"</div></div>"
     ].
@@ -96,9 +123,11 @@ header_html(P, VitalsInner) ->
         ~"<span class=\"wordmark\">nova<b>liveboard</b></span>",
         ~"<span class=\"live\"><span class=\"pip\"></span>live</span></div>",
         %% data-init opens the always-on vitals stream; #vitals is patched inner.
-        ~"<div data-init=\"@get('",
+        ~"<div data-liveboard-stream=\"",
         P,
-        ~"/sse/vitals')\"><div id=\"vitals\" class=\"vitals\">",
+        ~"/sse/vitals\" data-init=\"",
+        ?OPEN_STREAM,
+        ~"\"><div id=\"vitals\" class=\"vitals\">",
         VitalsInner,
         ~"</div></div></header>"
     ].
@@ -191,7 +220,7 @@ vital_stat(Label, Value) ->
         ~"<div class=\"vital\"><div class=\"v-top\"><span class=\"v-label\">",
         Label,
         ~"</span></div><div class=\"v-big\">",
-        Value,
+        html_escape(Value),
         ~"</div></div>"
     ].
 
@@ -341,7 +370,7 @@ processes_html(Procs, SortBy) ->
     ].
 
 sort_btn(Active, Key, Label) ->
-    P = nova_liveboard:prefix(),
+    P = html_escape(nova_liveboard:prefix()),
     Cls =
         case Active =:= Key of
             true -> ~"chip active";
@@ -431,7 +460,7 @@ sup_tree_html(Apps, Active, Result) ->
     ].
 
 app_chip(App, Active) ->
-    P = nova_liveboard:prefix(),
+    P = html_escape(nova_liveboard:prefix()),
     Name = atom_to_binary(App),
     Cls =
         case App =:= Active of
@@ -444,7 +473,7 @@ app_chip(App, Active) ->
         ~"\" href=\"",
         P,
         ~"/supervisors?app=",
-        Name,
+        uri_encode(Name),
         ~"\">",
         html_escape(Name),
         ~"</a>"
@@ -453,13 +482,7 @@ app_chip(App, Active) ->
 sup_body(_Active, {ok, Tree}) ->
     panel(~"supervision tree", [~"<div class=\"tree\">", tree_nodes(Tree, 0), ~"</div>"]);
 sup_body(Active, {error, Reason}) ->
-    empty([
-        ~"no supervisor found for ",
-        html_escape(atom_to_binary(Active)),
-        ~" (",
-        html_escape(to_bin(Reason)),
-        ~")"
-    ]).
+    empty([~"no supervisor found for ", atom_to_binary(Active), ~" (", to_bin(Reason), ~")"]).
 
 tree_nodes(Nodes, Depth) ->
     [tree_node(N, Depth) || N <- Nodes].
@@ -469,8 +492,8 @@ tree_node(Node, Depth) ->
     Children = maps:get(children, Node, []),
     Mem = maps:get(memory, Node, 0),
     [
-        ~"<div class=\"node\" style=\"--depth:",
-        integer_to_binary(Depth),
+        ~"<div class=\"node ",
+        depth_class(Depth),
         ~"\"><span class=\"n-kind ",
         kind_class(Type),
         ~"\">",
@@ -492,6 +515,11 @@ kind_glyph(_) -> ~"\x{25CF}".
 
 kind_class(supervisor) -> ~"sup";
 kind_class(_) -> ~"worker".
+
+depth_class(Depth) when is_integer(Depth), Depth > 0 ->
+    [~"d-", integer_to_binary(min(?MAX_DEPTH, Depth))];
+depth_class(_) ->
+    ~"d-0".
 
 %% ---------------------------------------------------------------------------
 %% requests (the live request tracer feed)
@@ -520,7 +548,6 @@ requests_html(Requests, Trace, true) ->
 -doc "The arm/disarm/clear toolbar (patched on its own as trace state changes).".
 -spec requests_toolbar_html(map()) -> iodata().
 requests_toolbar_html(Trace) ->
-    P = nova_liveboard:prefix(),
     Armed = maps:get(armed, Trace, false),
     Remaining = maps:get(remaining, Trace, 0),
     {StateCls, StateText} =
@@ -538,15 +565,23 @@ requests_toolbar_html(Trace) ->
         ~"\">",
         StateText,
         ~"</span>",
-        ~"<button class=\"chip\" data-on-click=\"@post('",
-        P,
-        ~"/requests/trace/start')\">arm next 10</button>",
-        ~"<button class=\"chip\" data-on-click=\"@post('",
-        P,
-        ~"/requests/trace/stop')\">disarm</button>",
-        ~"<button class=\"chip danger\" data-on-click=\"@post('",
-        P,
-        ~"/requests/clear')\">clear</button>"
+        action_button(~"chip", ~"/requests/trace/start", ~"arm next 10"),
+        action_button(~"chip", ~"/requests/trace/stop", ~"disarm"),
+        action_button(~"chip danger", ~"/requests/clear", ~"clear")
+    ].
+
+action_button(Class, Action, Label) ->
+    [
+        ~"<button class=\"",
+        Class,
+        ~"\" data-liveboard-action=\"",
+        html_escape(nova_liveboard:prefix()),
+        Action,
+        ~"\" data-on:click=\"",
+        ?POST_ACTION,
+        ~"\">",
+        Label,
+        ~"</button>"
     ].
 
 -doc "A single request row (also emitted as a prepended SSE patch on arrival).".
@@ -562,12 +597,11 @@ request_row(R) ->
         handler := Handler,
         spawned := Spawned
     } = R,
-    P = nova_liveboard:prefix(),
     [
         ~"<a class=\"req\" href=\"",
-        P,
+        html_escape(nova_liveboard:prefix()),
         ~"/requests/",
-        Id,
+        uri_encode(to_bin(Id)),
         ~"\"><span class=\"method ",
         method_class(Method),
         ~"\">",
@@ -577,7 +611,7 @@ request_row(R) ->
         ~"</span><span class=\"status ",
         status_code_class(Status),
         ~"\">",
-        status_bin(Status),
+        html_escape(status_bin(Status)),
         ~"</span><span class=\"r-dur\">",
         fmt_us(Dur),
         ~"</span><span class=\"r-reds\">",
@@ -623,7 +657,7 @@ request_detail_html(R) ->
             kv(~"duration", fmt_us(Dur)),
             kv(~"reductions", nova_liveboard_data:format_number(Reds)),
             kv(~"peak memory", nova_liveboard_data:format_bytes(Mem)),
-            kv(~"handler", html_escape(Handler))
+            kv(~"handler", Handler)
         ]),
         panel(
             [~"spawned processes (", integer_to_binary(length(Tree)), ~")"],
@@ -639,8 +673,8 @@ spawned_tree_html(Tree) ->
         ~"<div class=\"tree\">",
         [
             [
-                ~"<div class=\"node\" style=\"--depth:",
-                integer_to_binary(maps:get(depth, S, 0)),
+                ~"<div class=\"node ",
+                depth_class(maps:get(depth, S, 0)),
                 ~"\"><span class=\"n-kind worker\">\x{25CF}</span><span class=\"n-name\">",
                 html_escape(maps:get(mfa, S)),
                 ~"</span><span class=\"n-pid\">",
@@ -677,11 +711,9 @@ database_html(Repos) ->
     [
         ~"<div class=\"grid two\">",
         [
-            panel(html_escape(maps:get(module, Repo)), [
-                kv(~"database", html_escape(maps:get(database, Repo))),
-                kv(~"host", [
-                    html_escape(maps:get(hostname, Repo)), ~":", to_bin(maps:get(port, Repo))
-                ]),
+            panel(maps:get(module, Repo), [
+                kv(~"database", maps:get(database, Repo)),
+                kv(~"host", [to_bin(maps:get(hostname, Repo)), ~":", to_bin(maps:get(port, Repo))]),
                 kv(~"pool size", integer_to_binary(maps:get(pool_size, Repo))),
                 pool_stat(maps:get(pool, Repo))
             ])
@@ -710,7 +742,7 @@ schemas_html([]) ->
     empty(~"no kura schemas detected");
 schemas_html(Schemas) ->
     [
-        panel([html_escape(maps:get(module, S)), ~" \x{2192} ", html_escape(maps:get(table, S))], [
+        panel([to_bin(maps:get(module, S)), ~" \x{2192} ", to_bin(maps:get(table, S))], [
             table(
                 [~"field", ~"type", ~"flags"],
                 [
@@ -749,7 +781,7 @@ field_flags(F) ->
 panel(Title, Body) ->
     [
         ~"<section class=\"panel\"><h3 class=\"p-title\">",
-        Title,
+        html_escape(Title),
         ~"</h3><div class=\"p-body\">",
         Body,
         ~"</div></section>"
@@ -760,9 +792,9 @@ bar(Pct, Cls) ->
     [
         ~"<div class=\"bar\"><span class=\"fill ",
         Cls,
-        ~"\" style=\"width:",
+        ~" w-",
         PctB,
-        ~"%\"></span></div>"
+        ~"\"></span></div>"
     ].
 
 table(Headers, Rows) ->
@@ -789,7 +821,13 @@ cell_mono(V) -> [~"<td class=\"mono\">", html_escape(V), ~"</td>"].
 cell_num(V) -> [~"<td class=\"num\">", html_escape(V), ~"</td>"].
 
 kv(K, V) ->
-    [~"<div class=\"kv\"><span class=\"k\">", K, ~"</span><span class=\"v\">", V, ~"</span></div>"].
+    [
+        ~"<div class=\"kv\"><span class=\"k\">",
+        K,
+        ~"</span><span class=\"v\">",
+        html_escape(V),
+        ~"</span></div>"
+    ].
 
 empty(Msg) ->
     [~"<p class=\"empty\">", html_escape(Msg), ~"</p>"].
@@ -842,35 +880,93 @@ pct(Used, Limit) -> round(Used / Limit * 100).
 last_val([]) -> 0;
 last_val(L) -> lists:last(L).
 
-to_bin(B) when is_binary(B) -> B;
-to_bin(A) when is_atom(A) -> atom_to_binary(A);
-to_bin(I) when is_integer(I) -> integer_to_binary(I);
-to_bin(T) -> iolist_to_binary(io_lib:format("~p", [T])).
+-spec to_bin(term()) -> binary().
+to_bin(B) when is_binary(B) ->
+    B;
+to_bin(A) when is_atom(A) ->
+    atom_to_binary(A);
+to_bin(I) when is_integer(I) ->
+    integer_to_binary(I);
+to_bin(L) when is_list(L) ->
+    try unicode:characters_to_binary(L) of
+        B when is_binary(B) -> B;
+        _ -> printed(L)
+    catch
+        error:badarg -> printed(L)
+    end;
+to_bin(T) ->
+    printed(T).
+
+printed(T) ->
+    unicode:characters_to_binary(io_lib:format("~0tp", [T], [{chars_limit, ?MAX_PRINTED}])).
 
 %% ---------------------------------------------------------------------------
 %% security + escaping
 %% ---------------------------------------------------------------------------
 
 -doc """
-The dashboard's response headers. Strict CSP: everything is same-origin
-(self-hosted datastar.js, fonts, css), so any stray off-origin request fails
-loudly. `unsafe-eval` is required only for Datastar's `data-*` expression
-evaluation; the privacy-critical directives stay `'self'`.
+The dashboard's response headers.
+
+The policy starts from `default-src 'none'` and allows only what the page
+loads from its own origin: the script, the stylesheet, the fonts and the
+stream and action requests. `img-src` also allows `data:` for the one inline
+background image in the stylesheet. `'unsafe-eval'` has to stay: Datastar
+compiles its `data-*` expressions with `new Function`. That is why no dynamic
+value may ever be part of an expression (see the moduledoc). Inline scripts
+and inline styles are refused.
 """.
 -spec csp_headers() -> map().
 csp_headers() ->
     #{
         ~"content-type" => ~"text/html; charset=utf-8",
+        ~"cache-control" => ~"no-store",
+        ~"x-content-type-options" => ~"nosniff",
+        ~"x-frame-options" => ~"DENY",
+        ~"referrer-policy" => ~"same-origin",
         ~"content-security-policy" =>
-            ~"default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'"
+            ~"default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
     }.
 
--doc "Escape `& < > \"` for safe interpolation into HTML.".
--spec html_escape(iodata() | atom() | integer()) -> binary().
+-doc """
+Escape any term for an element body or a double-quoted attribute value. This
+is not enough for a Datastar expression: see the moduledoc.
+""".
+-spec html_escape(term()) -> binary().
 html_escape(B) when is_binary(B) ->
-    B1 = binary:replace(B, ~"&", ~"&amp;", [global]),
-    B2 = binary:replace(B1, ~"<", ~"&lt;", [global]),
-    B3 = binary:replace(B2, ~">", ~"&gt;", [global]),
-    binary:replace(B3, ~"\"", ~"&quot;", [global]);
+    <<<<(escape_byte(Byte))/binary>> || <<Byte>> <= B>>;
 html_escape(V) ->
     html_escape(to_bin(V)).
+
+-spec escape_byte(byte()) -> binary().
+escape_byte($&) -> ~"&amp;";
+escape_byte($<) -> ~"&lt;";
+escape_byte($>) -> ~"&gt;";
+escape_byte($") -> ~"&quot;";
+escape_byte($') -> ~"&#39;";
+escape_byte($\r) -> ~"&#13;";
+escape_byte(Byte) -> <<Byte>>.
+
+-doc """
+Percent-encode every byte that is not an RFC 3986 unreserved character. Works
+on bytes, so it never fails on a value that is not valid UTF-8.
+""".
+-spec uri_encode(binary()) -> binary().
+uri_encode(Bin) ->
+    <<<<(encode_byte(Byte))/binary>> || <<Byte>> <= Bin>>.
+
+-spec encode_byte(byte()) -> binary().
+encode_byte(Byte) when
+    Byte >= $a, Byte =< $z;
+    Byte >= $A, Byte =< $Z;
+    Byte >= $0, Byte =< $9;
+    Byte =:= $-;
+    Byte =:= $.;
+    Byte =:= $_;
+    Byte =:= $~
+->
+    <<Byte>>;
+encode_byte(Byte) ->
+    <<$%, (hex_digit(Byte bsr 4)), (hex_digit(Byte band 15))>>.
+
+hex_digit(N) when N < 10 -> $0 + N;
+hex_digit(N) -> $A + N - 10.
