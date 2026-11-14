@@ -249,7 +249,7 @@ sparkline_points(Values, Width, Height) ->
     Max = lists:max(Values),
     Range =
         case Max - Min of
-            0 -> 1;
+            Flat when Flat == 0 -> 1;
             R -> R
         end,
     Len = length(Values),

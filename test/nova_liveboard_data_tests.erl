@@ -28,7 +28,19 @@ sparkline_points_test_() ->
         ?_assertEqual(~"", nova_liveboard_data:sparkline_points([], 200, 40)),
         %% a single point spans the full width at mid-height
         ?_assertEqual(~"0,20.0 200.0,20.0", nova_liveboard_data:sparkline_points([5], 200, 40)),
-        ?_assert(is_binary(nova_liveboard_data:sparkline_points([1, 5, 3, 9, 2], 200, 40)))
+        ?_assert(is_binary(nova_liveboard_data:sparkline_points([1, 5, 3, 9, 2], 200, 40))),
+        ?_assertEqual(
+            ~"0.0,40.0 100.0,20.0 200.0,0.0",
+            nova_liveboard_data:sparkline_points([1, 2, 3], 200, 40)
+        ),
+        ?_assertEqual(
+            ~"0.0,40.0 100.0,40.0 200.0,40.0",
+            nova_liveboard_data:sparkline_points([3, 3, 3], 200, 40)
+        ),
+        %% a flat series of floats has a range of 0.0, which is not 0
+        ?_assertEqual(
+            ~"0.0,40.0 200.0,40.0", nova_liveboard_data:sparkline_points([1.5, 1.5], 200, 40)
+        )
     ].
 
 scheduler_info_test() ->
