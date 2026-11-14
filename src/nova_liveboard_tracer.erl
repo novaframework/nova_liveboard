@@ -6,8 +6,8 @@ Two jobs in one `gen_server`:
 
 1. **Store** - a capped, newest-first ring of recently completed requests
    (`nova_liveboard:request_buffer/0` deep). `nova_liveboard_trace_plugin`
-   calls `finalize/2` from each request's `post_request` hook; SSE feeds
-   `subscribe/0` to it for live updates.
+   calls `finalize/2` from each request's `post_request` hook;
+   `nova_liveboard_poller` `subscribe/0`s to it for live updates.
 
 2. **Trace collector** - when deep trace is armed (`start_trace/1`), the next
    N requests have their handling process traced with

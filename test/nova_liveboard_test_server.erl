@@ -4,7 +4,9 @@ Boots a real Nova listener with the liveboard mounted into a minimal host app,
 so tests can send raw HTTP over a socket.
 """.
 
--export([start/1, stop/1, request/2, request/3, open/2, read/2, status/1, header/2, body/1]).
+-export([
+    start/1, start/2, stop/1, request/2, request/3, open/2, read/2, status/1, header/2, body/1
+]).
 
 -define(HOST_APP, nova_liveboard_test_host).
 
@@ -13,13 +15,21 @@ so tests can send raw HTTP over a socket.
 
 -spec start([{atom(), term()}]) -> #{port := inet:port_number(), env := [atom()], level := term()}.
 start(BoardEnv) ->
+    start(BoardEnv, #{}).
+
+-doc "As `start/1`, with extra Cowboy protocol options for the listener.".
+-spec start([{atom(), term()}], map()) ->
+    #{port := inet:port_number(), env := [atom()], level := term()}.
+start(BoardEnv, ProtocolOptions) ->
     #{level := Level} = logger:get_primary_config(),
     ok = logger:set_primary_config(level, critical),
     Port = free_port(),
     _ = application:load(nova_liveboard),
     [application:set_env(nova_liveboard, Key, Value) || {Key, Value} <- BoardEnv],
     application:set_env(nova, bootstrap_application, ?HOST_APP),
-    application:set_env(nova, cowboy_configuration, #{port => Port, ip => {127, 0, 0, 1}}),
+    application:set_env(nova, cowboy_configuration, #{
+        port => Port, ip => {127, 0, 0, 1}, options => ProtocolOptions#{compress => true}
+    }),
     application:set_env(?HOST_APP, nova_apps, [nova_liveboard]),
     State = #{port => Port, env => [Key || {Key, _} <- BoardEnv], level => Level},
     case application:ensure_all_started(nova_liveboard) of

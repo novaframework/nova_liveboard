@@ -7,11 +7,22 @@ All settings live under the `nova_liveboard` application env:
 - `prefix` (default `"/liveboard"`) - the path the dashboard mounts on.
 - `refresh_ms` (default `2000`) - how often the polled SSE streams repaint.
 - `request_buffer` (default `200`) - how many recent requests the tracer keeps.
+- `max_streams` (default `50`) - how many live streams may be open at once.
+- `stream_lifetime_ms` (default `300000`) - how long one live stream may stay
+  open before the browser has to reconnect.
 - `auth` (no default) - who may use the liveboard, see `auth/0`.
 - `trusted_origins` (default `[]`) - see `trusted_origins/0`.
 """.
 
--export([prefix/0, refresh_ms/0, request_buffer/0, auth/0, trusted_origins/0]).
+-export([
+    prefix/0,
+    refresh_ms/0,
+    request_buffer/0,
+    max_streams/0,
+    stream_lifetime_ms/0,
+    auth/0,
+    trusted_origins/0
+]).
 
 -type auth() :: none | {module(), atom()}.
 -type auth_error() ::
@@ -32,7 +43,26 @@ prefix() ->
 -doc "Repaint interval for the polled (non-request) streams, in milliseconds.".
 -spec refresh_ms() -> pos_integer().
 refresh_ms() ->
-    application:get_env(nova_liveboard, refresh_ms, 2000).
+    case application:get_env(nova_liveboard, refresh_ms, 2000) of
+        N when is_integer(N), N > 0 -> N;
+        _ -> 2000
+    end.
+
+-doc "How many live streams may be open at once. Default 50.".
+-spec max_streams() -> non_neg_integer().
+max_streams() ->
+    case application:get_env(nova_liveboard, max_streams, 50) of
+        N when is_integer(N), N >= 0 -> N;
+        _ -> 50
+    end.
+
+-doc "How long one live stream may stay open before the browser must reconnect. Default 5 minutes.".
+-spec stream_lifetime_ms() -> pos_integer().
+stream_lifetime_ms() ->
+    case application:get_env(nova_liveboard, stream_lifetime_ms, 300000) of
+        N when is_integer(N), N > 0 -> N;
+        _ -> 300000
+    end.
 
 -doc "How many completed requests the tracer ring buffer retains.".
 -spec request_buffer() -> pos_integer().

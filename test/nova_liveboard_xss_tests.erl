@@ -8,7 +8,9 @@ liveboard's own constants.
 -include_lib("eunit/include/eunit.hrl").
 
 -define(HTML, nova_liveboard_html).
--define(OPEN_STREAM, ~"@get(el.dataset.liveboardStream)").
+-define(OPEN_STREAM,
+    ~"@get(el.dataset.liveboardStream, {retry: 'always', retryInterval: 3000})"
+).
 -define(POST_ACTION,
     ~"@post(el.dataset.liveboardAction, {headers: {'x-csrf-token': document.body.dataset.liveboardCsrf}})"
 ).

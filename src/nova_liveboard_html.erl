@@ -10,7 +10,7 @@ the whole module is unit-testable in isolation.
 `page/5` renders the full document shell (vitals deck + instrument nav +
 main stage). The per-region functions (`vitals_html/1`, `overview_html/1`,
 `processes_html/2`, ...) render the *inner* of a live region; the page
-controller uses them for the first paint and `nova_liveboard_sse` re-emits
+controller uses them for the first paint and `nova_liveboard_poller` re-emits
 them as Datastar patches as the VM changes.
 
 ## Output safety
@@ -54,7 +54,9 @@ rendered here:
     uri_encode/1
 ]).
 
--define(OPEN_STREAM, ~"@get(el.dataset.liveboardStream)").
+-define(OPEN_STREAM,
+    ~"@get(el.dataset.liveboardStream, {retry: 'always', retryInterval: 3000})"
+).
 -define(POST_ACTION,
     ~"@post(el.dataset.liveboardAction, {headers: {'x-csrf-token': document.body.dataset.liveboardCsrf}})"
 ).
@@ -589,7 +591,7 @@ action_button(Class, Action, Label) ->
         ~"</button>"
     ].
 
--doc "A single request row (also emitted as a prepended SSE patch on arrival).".
+-doc "A single request row.".
 -spec request_row(map()) -> iodata().
 request_row(R) ->
     #{
