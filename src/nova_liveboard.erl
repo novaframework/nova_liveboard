@@ -8,9 +8,10 @@ All settings live under the `nova_liveboard` application env:
 - `refresh_ms` (default `2000`) - how often the polled SSE streams repaint.
 - `request_buffer` (default `200`) - how many recent requests the tracer keeps.
 - `auth` (no default) - who may use the liveboard, see `auth/0`.
+- `trusted_origins` (default `[]`) - see `trusted_origins/0`.
 """.
 
--export([prefix/0, refresh_ms/0, request_buffer/0, auth/0]).
+-export([prefix/0, refresh_ms/0, request_buffer/0, auth/0, trusted_origins/0]).
 
 -type auth() :: none | {module(), atom()}.
 -type auth_error() ::
@@ -65,4 +66,16 @@ auth() ->
             {error, {invalid_auth, Other}};
         undefined ->
             {error, auth_not_configured}
+    end.
+
+-doc """
+Extra origins (`~"https://ops.example.com"`) whose POST requests are accepted
+when the browser sends no `Sec-Fetch-Site` header. Empty by default; see
+`m:nova_liveboard_csrf`.
+""".
+-spec trusted_origins() -> [binary()].
+trusted_origins() ->
+    case application:get_env(nova_liveboard, trusted_origins, []) of
+        Origins when is_list(Origins) -> [Origin || Origin <- Origins, is_binary(Origin)];
+        _ -> []
     end.

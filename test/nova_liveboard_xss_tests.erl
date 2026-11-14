@@ -9,7 +9,9 @@ liveboard's own constants.
 
 -define(HTML, nova_liveboard_html).
 -define(OPEN_STREAM, ~"@get(el.dataset.liveboardStream)").
--define(POST_ACTION, ~"@post(el.dataset.liveboardAction)").
+-define(POST_ACTION,
+    ~"@post(el.dataset.liveboardAction, {headers: {'x-csrf-token': document.body.dataset.liveboardCsrf}})"
+).
 
 -define(TAGS, [
     ~"!DOCTYPE",
@@ -61,6 +63,7 @@ liveboard's own constants.
     ~"points",
     ~"data-liveboard-stream",
     ~"data-liveboard-action",
+    ~"data-liveboard-csrf",
     ~"data-init",
     ~"data-on:click"
 ]).
@@ -135,7 +138,8 @@ renderers() ->
                 requests,
                 ~"/liveboard/sse/requests",
                 ?HTML:vitals_html(nova_liveboard_data:system_info()),
-                ?HTML:request_row(request(X))
+                ?HTML:request_row(request(X)),
+                X
             )
         end},
         {"processes page from a hostile query string", fun(X) ->
@@ -368,7 +372,7 @@ app_name_is_encoded_in_links_test() ->
 actions_are_constant_expressions_test() ->
     application:set_env(nova_liveboard, prefix, ~"/live');alert(1);//"),
     Html = iolist_to_binary(?HTML:requests_toolbar_html(#{armed => false, remaining => 0})),
-    Page = iolist_to_binary(?HTML:page(overview, ~"/x');alert(1);//", ~"", ~"")),
+    Page = iolist_to_binary(?HTML:page(overview, ~"/x');alert(1);//", ~"", ~"", ~"t")),
     application:set_env(nova_liveboard, prefix, "/liveboard"),
     ?assertEqual(nomatch, binary:match(Html, ~"@post('")),
     ?assertEqual(nomatch, binary:match(Page, ~"@get('")),

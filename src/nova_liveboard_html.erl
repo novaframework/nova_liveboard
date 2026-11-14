@@ -7,7 +7,7 @@ and `nova_liveboard_tracer`) and returns `iodata()`. No process state, no
 side effects beyond reading the static `nova_liveboard:prefix/0` config, so
 the whole module is unit-testable in isolation.
 
-`page/4` renders the full document shell (vitals deck + instrument nav +
+`page/5` renders the full document shell (vitals deck + instrument nav +
 main stage). The per-region functions (`vitals_html/1`, `overview_html/1`,
 `processes_html/2`, ...) render the *inner* of a live region; the page
 controller uses them for the first paint and `nova_liveboard_sse` re-emits
@@ -34,7 +34,7 @@ rendered here:
 """.
 
 -export([
-    page/4,
+    page/5,
     vitals_html/1,
     overview_html/1,
     metrics_html/1,
@@ -55,7 +55,9 @@ rendered here:
 ]).
 
 -define(OPEN_STREAM, ~"@get(el.dataset.liveboardStream)").
--define(POST_ACTION, ~"@post(el.dataset.liveboardAction)").
+-define(POST_ACTION,
+    ~"@post(el.dataset.liveboardAction, {headers: {'x-csrf-token': document.body.dataset.liveboardCsrf}})"
+).
 -define(MAX_DEPTH, 16).
 -define(MAX_PRINTED, 200).
 
@@ -79,10 +81,11 @@ Full HTML document: head + vitals deck + nav + the main stage.
 
 `StreamPath` is the SSE path the main region should subscribe to (so it
 repaints live), or `none` for a static page (e.g. a request detail) that must
-not be overwritten by a stream.
+not be overwritten by a stream. `CsrfToken` is the token from
+`nova_liveboard_csrf:token/1`, which the action buttons send back.
 """.
--spec page(atom(), binary() | none, iodata(), iodata()) -> iodata().
-page(Active, StreamPath, VitalsInner, MainInner) ->
+-spec page(atom(), binary() | none, iodata(), iodata(), binary()) -> iodata().
+page(Active, StreamPath, VitalsInner, MainInner, CsrfToken) ->
     P = html_escape(nova_liveboard:prefix()),
     [
         ~"<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">",
@@ -94,7 +97,9 @@ page(Active, StreamPath, VitalsInner, MainInner) ->
         ~"/assets/css/app.css\">",
         ~"<script type=\"module\" src=\"",
         P,
-        ~"/assets/js/datastar.js\"></script></head><body>",
+        ~"/assets/js/datastar.js\"></script></head><body data-liveboard-csrf=\"",
+        html_escape(CsrfToken),
+        ~"\">",
         ~"<div id=\"deck\">",
         header_html(P, VitalsInner),
         ~"<div class=\"body\">",

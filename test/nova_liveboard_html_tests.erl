@@ -32,7 +32,7 @@ csp_headers_test() ->
     ?assertEqual(~"text/html; charset=utf-8", maps:get(~"content-type", H)).
 
 page_includes_assets_and_nav_test() ->
-    Out = bin(nova_liveboard_html:page(overview, ~"/liveboard/sse/overview", ~"V", ~"M")),
+    Out = bin(nova_liveboard_html:page(overview, ~"/liveboard/sse/overview", ~"V", ~"M", ~"T")),
     ?assert(contains(Out, ~"<!DOCTYPE html>")),
     ?assert(contains(Out, ~"/assets/js/datastar.js")),
     ?assert(contains(Out, ~"/assets/css/app.css")),
@@ -41,8 +41,8 @@ page_includes_assets_and_nav_test() ->
     ?assert(contains(Out, ~"/liveboard/sse/overview")).
 
 live_page_has_main_stream_static_does_not_test() ->
-    Live = nova_liveboard_html:page(overview, ~"/liveboard/sse/overview", ~"V", ~"M"),
-    Static = nova_liveboard_html:page(requests, none, ~"V", ~"M"),
+    Live = nova_liveboard_html:page(overview, ~"/liveboard/sse/overview", ~"V", ~"M", ~"T"),
+    Static = nova_liveboard_html:page(requests, none, ~"V", ~"M", ~"T"),
     %% live = vitals stream + main stream; static = vitals stream only
     ?assertEqual(2, count(Live, ~"data-init")),
     ?assertEqual(1, count(Static, ~"data-init")).
