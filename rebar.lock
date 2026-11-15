@@ -3,7 +3,7 @@
  {<<"cowlib">>,{pkg,<<"cowlib">>,<<"2.19.0">>},2},
  {<<"datastar">>,
   {git,"https://github.com/Taure/datastar.git",
-       {ref,"fcc11f399294b305620a7c99ed633b898ce3889b"}},
+       {ref,"b1f08c5a4998aab33389eef1788619110829bb5b"}},
   0},
  {<<"erlydtl">>,{pkg,<<"erlydtl">>,<<"0.14.0">>},1},
  {<<"jhn_stdlib">>,{pkg,<<"jhn_stdlib">>,<<"5.11.2">>},1},
