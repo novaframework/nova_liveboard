@@ -45,12 +45,14 @@ stream_defaults_page_when_missing_test() ->
 -define(SERVER, nova_liveboard_test_server).
 -define(RENDER, {nova_liveboard_page_controller, page_inner, 2}).
 -define(ME, {peer, {127, 0, 0, 1}}).
+-define(NO_EVENT, #{type => ~"message", data => [], other => []}).
 
 poller_test_() ->
     {foreach, fun start_poller/0, fun stop_poller/1, [
         fun one_render_per_view_whatever_the_audience/0,
         fun each_view_is_rendered_separately/0,
         fun vitals_patch_their_own_region/0,
+        fun a_value_with_line_breaks_stays_in_one_event/0,
         fun metrics_accumulate_while_watched/0,
         fun requests_repaint_once_per_burst/0,
         fun subscriptions_are_capped/0,
@@ -127,6 +129,53 @@ vitals_patch_their_own_region() ->
     ?assert(contains(Frame, ~"selector #vitals")),
     ?assert(contains(Frame, ~"run queue")),
     ?assertEqual(0, renders()).
+
+a_value_with_line_breaks_stays_in_one_event() ->
+    Table = ets:new('a\rb\r\nc\nd', []),
+    Viewer = viewer({ets, undefined}),
+    ?POLLER ! tick,
+    Frame = frame_from(Viewer),
+    true = ets:delete(Table),
+    [#{type := Type, data := Data, other := Other}] = events(Frame),
+    ?assertEqual({~"datastar-patch-elements", []}, {Type, Other}),
+    ?assertEqual(
+        [~"elements", ~"mode", ~"selector"],
+        lists:usort([hd(binary:split(Line, ~" ")) || Line <- Data])
+    ),
+    ?assertEqual([~"#page"], values(~"selector", Data)),
+    ?assertEqual([~"inner"], values(~"mode", Data)),
+    Elements = <<<<Line/binary, $\n>> || Line <- values(~"elements", Data)>>,
+    ?assertMatch({_, _}, binary:match(Elements, ~">a&#13;b&#13;\nc\nd<")).
+
+%% Reads a stream the way an SSE client does: a line ends at CRLF, CR or LF,
+%% and an empty line ends an event. A field that is neither `event` nor `data`
+%% is kept under `other`.
+events(Stream) ->
+    events(binary:split(Stream, [~"\r\n", ~"\r", ~"\n"], [global]), ?NO_EVENT, []).
+
+events([], _Unfinished, Events) ->
+    lists:reverse(Events);
+events([~"" | Lines], Event, Events) when Event =:= ?NO_EVENT ->
+    events(Lines, ?NO_EVENT, Events);
+events([~"" | Lines], Event = #{data := Data, other := Other}, Events) ->
+    Read = Event#{data := lists:reverse(Data), other := lists:reverse(Other)},
+    events(Lines, ?NO_EVENT, [Read | Events]);
+events([<<$:, _Comment/binary>> | Lines], Event, Events) ->
+    events(Lines, Event, Events);
+events([Line | Lines], Event = #{data := Data, other := Other}, Events) ->
+    Next =
+        case binary:split(Line, [~": ", ~":"]) of
+            [~"event", Type] -> Event#{type := Type};
+            [~"data", Value] -> Event#{data := [Value | Data]};
+            [Name | _Value] -> Event#{other := [Name | Other]}
+        end,
+    events(Lines, Next, Events).
+
+%% What follows `Word` on the data lines of a Datastar event that start with it.
+-spec values(binary(), [binary()]) -> [binary()].
+values(Word, Data) ->
+    Size = byte_size(Word),
+    [Value || <<Start:Size/binary, $\s, Value/binary>> <- Data, Start =:= Word].
 
 metrics_accumulate_while_watched() ->
     Viewer = viewer({metrics, undefined}),
