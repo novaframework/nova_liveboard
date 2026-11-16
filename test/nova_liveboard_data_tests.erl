@@ -1,6 +1,8 @@
 -module(nova_liveboard_data_tests).
 -include_lib("eunit/include/eunit.hrl").
 
+-define(KURA, nova_liveboard_test_kura).
+
 format_bytes_test_() ->
     [
         ?_assertEqual(~"512 B", nova_liveboard_data:format_bytes(512)),
@@ -28,8 +30,31 @@ sparkline_points_test_() ->
         ?_assertEqual(~"", nova_liveboard_data:sparkline_points([], 200, 40)),
         %% a single point spans the full width at mid-height
         ?_assertEqual(~"0,20.0 200.0,20.0", nova_liveboard_data:sparkline_points([5], 200, 40)),
-        ?_assert(is_binary(nova_liveboard_data:sparkline_points([1, 5, 3, 9, 2], 200, 40)))
+        ?_assert(is_binary(nova_liveboard_data:sparkline_points([1, 5, 3, 9, 2], 200, 40))),
+        ?_assertEqual(
+            ~"0.0,40.0 100.0,20.0 200.0,0.0",
+            nova_liveboard_data:sparkline_points([1, 2, 3], 200, 40)
+        ),
+        ?_assertEqual(
+            ~"0.0,40.0 100.0,40.0 200.0,40.0",
+            nova_liveboard_data:sparkline_points([3, 3, 3], 200, 40)
+        ),
+        %% a flat series of floats has a range of 0.0, which is not 0
+        ?_assertEqual(
+            ~"0.0,40.0 200.0,40.0", nova_liveboard_data:sparkline_points([1.5, 1.5], 200, 40)
+        )
     ].
+
+scheduler_info_test() ->
+    _ = nova_liveboard_data:collect_metrics(undefined),
+    Schedulers = nova_liveboard_data:scheduler_info(),
+    ?assert(length(Schedulers) >= erlang:system_info(schedulers)),
+    ?assertEqual(
+        lists:seq(1, length(Schedulers)), [
+            Id
+         || #{id := Id, active := Active} <- Schedulers, Active >= 0
+        ]
+    ).
 
 system_info_shape_test() ->
     Sys = nova_liveboard_data:system_info(),
@@ -62,3 +87,243 @@ collect_metrics_accumulates_test() ->
     S1 = nova_liveboard_data:collect_metrics(S0),
     ?assertEqual(2, queue:len(maps:get(total_memory, S1))),
     ?assert(is_list(maps:get(scheduler_util, S1))).
+
+%% The application master and the process that starts the application are
+%% not supervisors and never answer `which_children`.
+unnamed_top_supervisor_test_() ->
+    {setup,
+        fun() ->
+            ok = nova_liveboard_test_unnamed_app:load(),
+            ok = application:start(nova_liveboard_test_unnamed)
+        end,
+        fun(_) ->
+            ok = application:stop(nova_liveboard_test_unnamed),
+            ok = application:unload(nova_liveboard_test_unnamed)
+        end,
+        [
+            {timeout, 5, fun() ->
+                {ok, Tree} = nova_liveboard_data:supervision_tree(nova_liveboard_test_unnamed),
+                ?assertEqual(2, length(Tree)),
+                ?assertEqual([~"plain"], [Name || #{name := Name} <- Tree, Name =:= ~"plain"]),
+                ?assertEqual([worker, worker], [Type || #{type := Type} <- Tree])
+            end},
+            fun() ->
+                [Unnamed] = [
+                    App
+                 || #{name := ~"nova_liveboard_test_unnamed"} = App <-
+                        nova_liveboard_data:running_applications()
+                ],
+                ?assertEqual(
+                    #{
+                        name => ~"nova_liveboard_test_unnamed",
+                        description => ~"Unnamed \x{2192} top supervisor",
+                        version => ~"1.0.0"
+                    },
+                    Unnamed
+                )
+            end
+        ]}.
+
+kura_schema_test_() ->
+    {setup, fun() -> ok = nova_liveboard_test_unnamed_app:load() end,
+        fun(_) -> ok = application:unload(nova_liveboard_test_unnamed) end, fun() ->
+            ?assertEqual(
+                [
+                    #{
+                        module => ~"nova_liveboard_test_schema",
+                        table => ~"things",
+                        fields => [
+                            #{
+                                name => ~"id",
+                                type => ~"id",
+                                primary_key => true,
+                                virtual => false
+                            },
+                            #{
+                                name => ~"name",
+                                type => ~"string",
+                                primary_key => false,
+                                virtual => false
+                            },
+                            #{
+                                name => ~"tags",
+                                type => ~"array(string)",
+                                primary_key => false,
+                                virtual => true
+                            }
+                        ],
+                        associations => [
+                            #{
+                                name => ~"owner",
+                                type => ~"belongs_to",
+                                schema => ~"nova_liveboard_test_schema"
+                            },
+                            #{
+                                name => ~"parts",
+                                type => ~"has_many",
+                                schema => ~"nova_liveboard_test_schema"
+                            }
+                        ],
+                        indexes => [
+                            #{columns => [~"name"], unique => true},
+                            #{columns => [~"owner_id", ~"name"], unique => false}
+                        ]
+                    }
+                ],
+                nova_liveboard_data:kura_schemas(nova_liveboard_test_unnamed_app)
+            )
+        end}.
+
+kura_repo_infos_test_() ->
+    {foreach,
+        fun() ->
+            ok = ?KURA:start(#{
+                shop_repo => ?KURA:postgres(shop_pool),
+                files_repo => ?KURA:sqlite()
+            }),
+            ok = ?KURA:minato(),
+            ?KURA:pool(shop_pool, ?KURA:stats())
+        end,
+        fun(Pool) ->
+            ok = gen_server:stop(Pool),
+            ?KURA:stop()
+        end,
+        [
+            fun postgres_repo_with_its_pool_figures/0,
+            fun sqlite_repo_without_figures/0,
+            fun repo_that_is_not_configured/0,
+            fun host_under_either_key/0,
+            fun settings_written_as_binaries_and_atoms/0,
+            fun settings_that_are_not_text_are_left_out/0,
+            fun only_the_shown_settings_are_read/0,
+            fun repo_whose_init_fails/0,
+            fun repos_keep_their_order/0
+        ]}.
+
+postgres_repo_with_its_pool_figures() ->
+    ?assertEqual(
+        [
+            #{
+                module => ~"shop_repo",
+                database => ~"shop",
+                host => ~"db.internal",
+                port => 5432,
+                configured_size => 10,
+                pool => #{
+                    status => ~"running",
+                    backend => ~"postgres (minato)",
+                    name => ~"shop_pool",
+                    figures => #{
+                        size => 10,
+                        in_use => 2,
+                        idle => 3,
+                        waiting => 1,
+                        counters => [
+                            {~"checkouts", 120},
+                            {~"waits", 7},
+                            {~"timeouts", 1},
+                            {~"disconnects", 4},
+                            {~"retired", 2}
+                        ]
+                    }
+                }
+            }
+        ],
+        nova_liveboard_data:kura_repo_infos([shop_repo])
+    ).
+
+%% No host and no port: a file has neither, and none is made up.
+sqlite_repo_without_figures() ->
+    ?assertEqual(
+        [
+            #{
+                module => ~"files_repo",
+                database => ~"priv/files.db",
+                configured_size => 4,
+                pool => #{
+                    status => ~"not available",
+                    backend => ~"sqlite",
+                    name => ~"files_repo",
+                    reason => ~"kura_pool_sqlite exports no function that reports pool figures"
+                }
+            }
+        ],
+        nova_liveboard_data:kura_repo_infos([files_repo])
+    ).
+
+repo_that_is_not_configured() ->
+    ?assertEqual(
+        [
+            #{
+                module => ~"nova_liveboard_test_repo",
+                pool => #{
+                    status => ~"not available",
+                    reason => ~"the repo has no pool module configured"
+                }
+            }
+        ],
+        nova_liveboard_data:kura_repo_infos([nova_liveboard_test_repo])
+    ).
+
+host_under_either_key() ->
+    Config = maps:remove(host, ?KURA:postgres(shop_pool)),
+    ok = application:set_env(kura, repos, #{shop_repo => Config#{hostname => "replica.internal"}}),
+    ?assertMatch(
+        [#{host := ~"replica.internal"}], nova_liveboard_data:kura_repo_infos([shop_repo])
+    ).
+
+settings_written_as_binaries_and_atoms() ->
+    Config = ?KURA:postgres(shop_pool),
+    ok = application:set_env(kura, repos, #{
+        shop_repo => Config#{database => ~"sh\x{f6}p", host => localhost}
+    }),
+    ?assertMatch(
+        [#{database := ~"sh\x{f6}p", host := ~"localhost"}],
+        nova_liveboard_data:kura_repo_infos([shop_repo])
+    ).
+
+settings_that_are_not_text_are_left_out() ->
+    Config = ?KURA:postgres(shop_pool),
+    ok = application:set_env(kura, repos, #{
+        shop_repo => Config#{
+            database => {secret, "hunter2"},
+            host => [{password, "hunter2"}],
+            port => "5432",
+            pool_size => many
+        }
+    }),
+    [Repo] = nova_liveboard_data:kura_repo_infos([shop_repo]),
+    ?assertEqual([module, pool], lists:sort(maps:keys(Repo))).
+
+only_the_shown_settings_are_read() ->
+    [Repo] = nova_liveboard_data:kura_repo_infos([shop_repo]),
+    Printed = iolist_to_binary(io_lib:format("~0tp", [Repo])),
+    ?assertEqual(nomatch, binary:match(Printed, ~"hunter2")),
+    ?assertEqual(nomatch, binary:match(Printed, ~"shop_user")).
+
+repo_whose_init_fails() ->
+    ok = application:set_env(kura, repos, #{
+        nova_liveboard_test_raising_repo => ?KURA:postgres(shop_pool)
+    }),
+    ?assertEqual(
+        [
+            #{
+                module => ~"nova_liveboard_test_raising_repo",
+                pool => #{
+                    status => ~"not available",
+                    reason => ~"kura could not say which pool the repo uses"
+                }
+            }
+        ],
+        nova_liveboard_data:kura_repo_infos([nova_liveboard_test_raising_repo])
+    ).
+
+repos_keep_their_order() ->
+    ?assertMatch(
+        [
+            #{module := ~"files_repo"},
+            #{module := ~"shop_repo"},
+            #{module := ~"files_repo"}
+        ],
+        nova_liveboard_data:kura_repo_infos([files_repo, shop_repo, files_repo])
+    ).

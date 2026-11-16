@@ -19,8 +19,16 @@ armed - turns on scoped process tracing of the handling process.
 hands the summary to `nova_liveboard_tracer`. The whole chain runs in one
 process, so the marker stashed in `Req` survives from pre to post.
 
-The dashboard's own routes are skipped so it never traces itself (its SSE
-streams never return, and would otherwise never finalise).
+Only the path is captured, never the query string, and it passes through
+`nova_liveboard_redact:request_path/1` first, so neither the marker nor the
+tracer ever holds the original.
+
+The dashboard's own requests are skipped so it never traces itself (its SSE
+streams never return, and would otherwise never finalise). A request is the
+dashboard's own when Nova routed it to the `nova_liveboard` application, or
+when its path is the mount prefix or lies below it. The prefix is compared by
+whole segments, so with the prefix `/liveboard` a host route `/liveboardXYZ`
+or `/liveboard-status` is still captured.
 """.
 
 -behaviour(nova_plugin).
@@ -34,7 +42,7 @@ init() ->
     {ok, undefined}.
 
 pre_request(Req, Env, _Opts, State) ->
-    case skip(Req) of
+    case skip(Req, Env) of
         true ->
             {ok, Req, State};
         false ->
@@ -45,7 +53,7 @@ pre_request(Req, Env, _Opts, State) ->
                 t0 => erlang:monotonic_time(microsecond),
                 reds0 => reductions(),
                 method => cowboy_req:method(Req),
-                path => cowboy_req:path(Req),
+                path => nova_liveboard_redact:request_path(cowboy_req:path(Req)),
                 handler => handler_mfa(Env),
                 traced => Traced
             },
@@ -116,15 +124,27 @@ arm(ReqId) ->
             end
     end.
 
-skip(Req) ->
-    whereis(nova_liveboard_tracer) =:= undefined orelse
+skip(Req, Env) ->
+    whereis(nova_liveboard_tracer) =:= undefined orelse own_route(Env) orelse
         own_path(cowboy_req:path(Req)).
 
+own_route(#{app := nova_liveboard}) -> true;
+own_route(_Env) -> false.
+
+%% With an empty prefix the liveboard is mounted at the root and every path
+%% lies below it, so only the routed application tells its requests apart.
+-spec own_path(binary()) -> boolean().
 own_path(Path) ->
-    Prefix = nova_liveboard:prefix(),
-    case binary:match(Path, Prefix) of
-        {0, _} -> true;
-        _ -> false
+    case nova_liveboard:prefix() of
+        ~"" ->
+            false;
+        Prefix ->
+            Size = byte_size(Prefix),
+            case Path of
+                <<Prefix:Size/binary>> -> true;
+                <<Prefix:Size/binary, "/", _/binary>> -> true;
+                _ -> false
+            end
     end.
 
 handler_mfa(#{callback := Fun}) when is_function(Fun) ->
@@ -149,4 +169,4 @@ mem() ->
     end.
 
 new_id() ->
-    string:lowercase(binary:encode_hex(crypto:strong_rand_bytes(6))).
+    binary:encode_hex(crypto:strong_rand_bytes(6), lowercase).

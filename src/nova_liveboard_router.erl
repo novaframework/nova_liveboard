@@ -1,17 +1,20 @@
 -module(nova_liveboard_router).
 -behaviour(nova_router).
 
+-include_lib("kernel/include/logger.hrl").
+
 -export([routes/1]).
 
 %% All pages, the per-region SSE streams, the request-trace actions and the
 %% static assets run on Nova's own listener under the configured prefix. The
 %% /sse/:page route returns {stream, ...}, held open by nova_liveboard_sse
-%% (see that module + novaframework/nova#387).
+%% (see that module + novaframework/nova#387). Assets are a closed set, not a
+%% wildcard directory: no request data is ever joined onto a path.
 routes(_Env) ->
     [
         #{
             prefix => binary_to_list(nova_liveboard:prefix()),
-            security => false,
+            security => security(),
             routes => [
                 {"/", fun nova_liveboard_page_controller:index/1, #{methods => [get]}},
                 {"/processes", fun nova_liveboard_page_controller:processes/1, #{methods => [get]}},
@@ -41,7 +44,48 @@ routes(_Env) ->
                 }},
                 {"/sse/:page", fun nova_liveboard_sse:stream/1, #{methods => [get]}},
                 {"/heartbeat", fun(_) -> {status, 200} end, #{methods => [get]}},
-                {"/assets/[...]", "static/assets"}
+                {"/assets/css/app.css", fun nova_liveboard_asset_controller:stylesheet/1, #{
+                    methods => [get]
+                }},
+                {"/assets/js/datastar.js", fun nova_liveboard_asset_controller:script/1, #{
+                    methods => [get]
+                }},
+                {"/assets/fonts/:font", fun nova_liveboard_asset_controller:font/1, #{
+                    methods => [get]
+                }}
             ]
         }
     ].
+
+%% The liveboard shows the node's processes, tables, ports and request
+%% traffic, so it never mounts without the host having decided who may reach
+%% it, and never on settings it would have to guess at. Nova builds the routes
+%% while it starts, which can be before this application is loaded: loading
+%% it here makes the env it is configured with visible.
+security() ->
+    _ = application:load(nova_liveboard),
+    case nova_liveboard:validate() of
+        ok -> auth();
+        {error, Invalid} -> refuse({invalid_config, Invalid}, ~"set each key to what it accepts")
+    end.
+
+auth() ->
+    case nova_liveboard:auth() of
+        {ok, none} ->
+            ?LOG_WARNING(#{
+                msg => ~"nova_liveboard_mounted_without_auth",
+                prefix => nova_liveboard:prefix()
+            }),
+            false;
+        {ok, {Module, Function}} ->
+            fun Module:Function/1;
+        {error, Reason} ->
+            refuse(
+                Reason, ~"set {auth, {Module, Function}} or {auth, none} in the nova_liveboard env"
+            )
+    end.
+
+-spec refuse(term(), binary()) -> no_return().
+refuse(Reason, Fix) ->
+    ?LOG_ERROR(#{msg => ~"nova_liveboard_refusing_to_mount", reason => Reason, fix => Fix}),
+    error({nova_liveboard_refusing_to_mount, Reason}).
